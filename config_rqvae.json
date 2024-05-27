@@ -1,0 +1,46 @@
+{
+  "project_name": "rq-vae",
+  "config_name": "config_rqvae-rqgid.json",
+  "model_type": "rqvae",
+  "epoch": 10000,
+  "warmup_ratio": 0.01,
+  "lr": 1e-3,
+  "weight_decay": 0,
+  "optim": "adamw",
+  "scheduler": "linear",
+  "seed": 2024,
+  "save_name": "Yelp-gid-best-batch-nodecay",
+  "shuffle": true,
+  "batch_size": 4096,
+  "distributed": false,
+  "load": false,
+  "rqvae_config": {
+    "gid_name": "embedding-768-best",
+    "embedding_type": "gid",
+    "k_iter": 100,
+    "norm_type": "no",
+    "data_dir": "data/",
+    "domain": "Yelp",
+    "n_embed": [
+      256,
+      256,
+      256
+    ],
+    "embed_dim": 32,
+    "code_len": 3,
+    "n_layers": 4,
+    "dims": [
+      768,
+      512,
+      256,
+      128,
+      64,
+      32
+    ],
+    "beta": 0.25,
+    "act": "relu",
+    "shared_codebook": false,
+    "restart_unused_codes": true,
+    "drop": 0
+  }
+}
