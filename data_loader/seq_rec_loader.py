@@ -142,11 +142,11 @@ class SCRecDset(Dataset):
         purchase_history = purchase_history[-20:]
 
         _, given_type, _, pred_type = instruction.split(' ')
-        if given_type == '<G>':
+        if given_type == '<C>':
             convert_given_iid = self.iid_ceid
         else:
             convert_given_iid = self.iid_seid
-        if pred_type == '<G>':
+        if pred_type == '<C>':
             convert_pred_iid = self.iid_ceid
         else:
             convert_pred_iid = self.iid_seid
