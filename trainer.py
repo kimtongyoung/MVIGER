@@ -67,16 +67,8 @@ def p5_runner(config):
     np.random.seed(SEED)
     random.seed(SEED)
     save_name = config['save_name']
-
-    ############## wandb logging
-    run = wandb.init(project=config['project_name'], reinit=True)
-    now = datetime.now()
     save_dir = f'./saved/models/{config["project_name"]}/{save_name}/'
-    name = save_name + now.strftime('-%Y-%m-%d-%H%M%S')
-    wandb.run.name = name
-    wandb.run.save()
-    ############
-    # initialize save path
+
     if os.path.exists(save_dir):
         import shutil
         shutil.rmtree(save_dir)
