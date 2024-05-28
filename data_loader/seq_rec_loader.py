@@ -194,7 +194,6 @@ class SCRecDset(Dataset):
                 whole_word_ids.append(curr)
             else:
                 whole_word_ids.append(curr)
-
         return whole_word_ids[: len(input_ids) - 1] + [0]
 
     def collate_fn(self, batch):
