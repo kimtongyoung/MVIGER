@@ -22,9 +22,6 @@ class ConfigParser:
         self._config = _update_config(config, modification)
         self.resume = resume
 
-
-
-
     @classmethod
     def from_args(cls, args, options=''):
         """
@@ -45,14 +42,14 @@ class ConfigParser:
             assert args.config is not None, msg_no_cfg
             resume = None
             cfg_fname = Path(args.config)
-        
+
         config = read_json(cfg_fname)
         if args.config and resume:
             # update new config for fine-tuning
             config.update(read_json(args.config))
 
         # parse custom cli options into dictionary
-        modification = {opt.target : getattr(args, _get_opt_name(opt.flags)) for opt in options}
+        modification = {opt.target: getattr(args, _get_opt_name(opt.flags)) for opt in options}
 
         # wandb track experiments
 
@@ -112,6 +109,7 @@ class ConfigParser:
     def log_dir(self):
         return self._log_dir
 
+
 # helper functions to update config dict with custom cli options
 def _update_config(config, modification):
     if modification is None:
@@ -122,16 +120,19 @@ def _update_config(config, modification):
             _set_by_path(config, k, v)
     return config
 
+
 def _get_opt_name(flags):
     for flg in flags:
         if flg.startswith('--'):
             return flg.replace('--', '')
     return flags[0].replace('--', '')
 
+
 def _set_by_path(tree, keys, value):
     """Set a value in a nested object in tree by sequence of keys."""
     keys = keys.split(';')
     _get_by_path(tree, keys[:-1])[keys[-1]] = value
+
 
 def _get_by_path(tree, keys):
     """Access a nested object in tree by sequence of keys."""

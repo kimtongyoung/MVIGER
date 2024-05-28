@@ -1,23 +1,30 @@
 import pdb
-
 import torch.nn.functional
 from torch.utils.data import DataLoader
-# import tqdm
 from datetime import datetime
 from shutil import copyfile
 import random
 import wandb
+from tqdm import tqdm
 from model.rqvae4rec import *
+from transformers.optimization import get_linear_schedule_with_warmup, get_constant_schedule_with_warmup
+from torch.optim import AdamW, Adagrad
+from collections import defaultdict
 
 
-# from model.modules.p5.src.tokenization import P5Tokenizer
+import json
 
+
+def save_json(dict, path):
+    json_str = json.dumps(dict)
+    with open(path, 'w') as out:
+        out.write(json_str)
 
 def generate_dict(codebook_size, code_length):
     lv_dict = {}
     for length in range(code_length):
         lv_dict[length + 1] = defaultdict(int)
-        for code in range(codebook_size[length]):
+        for code in range(codebook_size):
             lv_dict[length + 1][code] = 0
     return lv_dict
 
@@ -45,8 +52,6 @@ def calc_percent(dev):
 
 
 def create_optimizer_and_scheduler(config, train_loader, model):
-    from transformers.optimization import get_linear_schedule_with_warmup, get_constant_schedule_with_warmup
-    from torch.optim import AdamW, Adagrad
     steps_per_epoch = len(train_loader)
     t_total = steps_per_epoch * config['epoch']
     warmup_ratio = config['warmup_ratio']
@@ -57,12 +62,9 @@ def create_optimizer_and_scheduler(config, train_loader, model):
     print('Warmup ratio:', warmup_ratio)
     print("Warm up Iters: %d" % warmup_iters)
 
-    optimizer_grouped_parameters = [{"params": [p for n, p in model.named_parameters()], "weight_decay": config['weight_decay']}]
+    optimizer_grouped_parameters = [{"params": [p for n, p in model.named_parameters()]}]
     optim = AdamW(optimizer_grouped_parameters, lr=config['lr'])
-    if config['scheduler'] == 'linear':
-        lr_scheduler = get_linear_schedule_with_warmup(optim, warmup_iters, t_total)
-    else:
-        lr_scheduler = get_constant_schedule_with_warmup(optim, warmup_iters)
+    lr_scheduler = get_linear_schedule_with_warmup(optim, warmup_iters, t_total)
 
     return optim, lr_scheduler
 
@@ -91,15 +93,7 @@ def rqvae_runner(config):
     random.seed(SEED)
 
     save_name = config['save_name']
-
-    # wandb logging
-    wandb.init(project=config['project_name'], reinit=True)
-
-    now = datetime.now()
-    save_dir = f'./saved/models/{config["project_name"]}/{save_name}/'
-    name = save_name + now.strftime('-%Y-%m-%d-%H%M%S')
-    wandb.run.name = name
-    wandb.run.save()
+    save_dir = f'./saved/models/{config["project_name"]}/{config["domain"]}_{save_name}/'
 
     if os.path.exists(save_dir):
         import shutil
@@ -115,34 +109,26 @@ def rqvae_runner(config):
     model.to(device)
 
     # data_loader
-    if config['rqvae_config']['embedding_type'] == 'gid':
-        dset = GIDEmbeddingLoader(config['rqvae_config'], user=False)
-    elif config['rqvae_config']['embedding_type'] == 'uid':
-        dset = GIDEmbeddingLoader(config['rqvae_config'], user=True)
-    elif config['rqvae_config']['embedding_type'] == 'sid':
-        dset = SemIDEmbeddingLoader(config['rqvae_config'])
-    elif config['rqvae_config']['embedding_type'] == 'hid':
-        dset = HIDEmbeddingLoader(config['rqvae_config'], config['rqvae_config']['mix_type'])
-    loader = DataLoader(dset, shuffle=config['shuffle'], batch_size=config['batch_size'],
+    if config['rqvae_config']['embedding_type'] == 'ceid':
+        dset = CEIDEmbeddingLoader(config['rqvae_config'], user=False)
+
+    elif config['rqvae_config']['embedding_type'] == 'seid':
+        dset = SEIDEmbeddingLoader(config['rqvae_config'])
+
+    loader = DataLoader(dset, shuffle=True, batch_size=config['batch_size'],
                         collate_fn=dset.collate_fn)
     optim, lr_scheduler = create_optimizer_and_scheduler(config, loader, model)
 
     ckpt_path = os.path.join(save_dir, f'model_best_1ep.pth')
-    if config['distributed']:
-        dist.barrier()
-
-    curr_best = 10000.
-    for epoch in range(config['epoch']):
+    for epoch in tqdm(range(config['epoch'])):
         # train
         model.train()
         train_loss = 0.
         recon_loss = 0.
         latent_loss = 0.
         for step_t, batch in enumerate(loader):
-            # pdb.set_trace()
             inp = batch['input_emb'].to(device)
             outputs = model(inp)
-            # out, quant_loss, split-gcn-code
             outputs = model.compute_loss(*outputs, x=inp)
             loss = outputs['loss_total']
             loss_reconstruct = outputs['loss_recon']
@@ -155,47 +141,73 @@ def rqvae_runner(config):
             optim.step()
             lr_scheduler.step()
             lr = lr_scheduler.get_last_lr()[0]
-
-        model.eval()
-        code_outs = []
-        for step_v, batch in enumerate(loader):
-            # pdb.set_trace()
-            inp = batch['input_emb'].to(device)
-            outputs = model(inp)
-            # out, quant_loss, split-gcn-code
-            codes = outputs[2]
-            code_outs.append(codes)
-        total_code_tensor = torch.cat(code_outs, 0)
-        collision_num, calc_dict = calc_collision_num(total_code_tensor)
-        code_length = config['rqvae_config']['code_len']
-        codebook_size = config['rqvae_config']['n_embed']
-        lv_dict = generate_dict(codebook_size, code_length)
-        lv_dict = count_dict(total_code_tensor, lv_dict, code_length)
-
-        std_list, count = calc_div(lv_dict, code_length, codebook_size)
-        std = np.mean(std_list)
-        per = calc_percent(count)
-        # pdb.set_trace()
-        #
-        print(f'{epoch + 1} train loss: {train_loss / step_t}, recon: {recon_loss / step_t},'
-              f' latent: {latent_loss / step_t} last_lr: {lr}')
-        print(f' std: {std}, std_list: {std_list}')
-        print(f' collision_num: {collision_num}, lv usage: {per}')
-        print('###############################################################')
-        wandb.log({"train_loss": train_loss / step_t, 'epoch': epoch})
-        wandb.log({"recon_loss": recon_loss / step_t, 'epoch': epoch})
-        wandb.log({"latent_loss": latent_loss / step_t, 'epoch': epoch})
-        wandb.log({"collision_num": collision_num, 'epoch': epoch})
-        for length in range(code_length):
-            wandb.log({f"lv{length + 1} usage": per[length], 'epoch': epoch})
-        wandb.log({"lr": lr, 'epoch': epoch})
-
-        if per[0] >= 80:
-            if collision_num <= curr_best:
-                if os.path.isfile(ckpt_path):
-                    os.remove(ckpt_path)
-                curr_best = collision_num
-                torch.save(model.state_dict(), f'{save_dir}model_best_{epoch + 1}ep.pth')
-                ckpt_path = os.path.join(save_dir, f'model_best_{epoch + 1}ep.pth')
-        if (epoch + 1) % 1000 == 0:
+        if (epoch + 1) % 100 == 0:
             torch.save(model.state_dict(), f'{save_dir}model_{epoch + 1}ep.pth')
+
+
+    model = RQVAE(config['rqvae_config'])
+    state_dict = torch.load(f'{save_dir}model_{config["epoch"]}ep.pth', 'cpu')
+    model.load_state_dict(state_dict)
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    model.to(device)
+    model.eval()
+
+
+    item_idx_list = []
+    code_outs = []
+    total_count = 0
+    with torch.no_grad():
+        for i, batch in tqdm(enumerate(loader)):
+            inp = batch['input_emb'].to(device)
+            codes = model.get_codes(inp)
+            item_idx = batch['item_idx']
+            item_idx_list.append(item_idx)
+            code_outs.append(codes)
+            batch_size = inp.size(0)
+            total_count += batch['input_emb'].size(0)
+
+    total_code_tensor = torch.cat(code_outs, 0)
+
+    codebook_size = config['codebook_size']
+    code_length = config['code_length']
+    lv_dict = generate_dict(codebook_size, code_length)
+    lv_dict = count_dict(total_code_tensor, lv_dict, code_length)
+
+
+    def create_code_dict(item_idx_list, total_code_tensor):
+        code_dict = {}
+        arr = np.concatenate(item_idx_list, 0).tolist()
+        for idx, item_idx in enumerate(arr):
+            code_dict[item_idx] = total_code_tensor[idx].tolist()
+        return code_dict
+
+    result = create_code_dict(item_idx_list, total_code_tensor)
+
+    def collision_handling(result):
+        res_out = {}
+        token_size = config['codebook_size']
+        id_count = {}
+        collision_idx = 1
+        for iid, code in result.items():
+            raw_id = ','.join([str(c) for c in code])
+            if raw_id not in id_count:
+                id_count[raw_id] = 1
+                idx = raw_id + ',0'
+                idx = idx.split(',')
+                res_out[iid] = np.array(idx, dtype=int).tolist()
+            else:
+                id_count[raw_id] += 1
+                idx = raw_id + f',{collision_idx}'
+                collision_idx += 1
+                idx = idx.split(',')
+                res_out[iid] = np.array(idx, dtype=int).tolist()
+        print(collision_idx)
+        return res_out, collision_idx
+
+
+    res_out, collision_idx = collision_handling(result)
+
+    path = f'data/{config["domain"]}/{save_name}_{collision_idx}_.json'
+    save_json(res_out, path)
+
+    print(f'ID is created at : {path}, with extra {collision_idx}  tokens')

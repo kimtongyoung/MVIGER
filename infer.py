@@ -5,7 +5,6 @@ from tqdm import tqdm
 import numpy as np
 import torch
 from model.main import T5SequentialRecommender
-from model.modules.p5.notebooks.evaluate.metrics4rec import evaluate_all
 import pickle
 from model.utils import Trie, predict_outputs, prefix_allowed_tokens_fn, save_outputs
 from transformers import AutoTokenizer, T5Config
@@ -54,138 +53,177 @@ def load_checkpoint(model, ckpt_path):
     print('Model loaded from ', ckpt_path)
 
 
-from data_loader.amazon_loader import Dset, CrossDset
+from data_loader.seq_rec_loader import SCRecDset
 from torch.utils.data import DataLoader
+from collections import defaultdict
 
-config = {
-    "model_type": "p5",
-    "backbone": "t5-small",
-    "seed": 2024,
-    "act_fn": "relu",
-    "lr": 1e-3,
-    "code_length": 3,
-    "codebook_size": 256,
-    # "max_index1": 0,
-    # "max_index2": 949,
-    # "idx_name1": "sequential_data-Beauty-gid_253.json",
-    # "idx_name2": "sequential_data-Beauty-sid_949.json",
-    # "max_index1": 0,
-    # "max_index2": 1523,
-    # "idx_name1": "sequential_data-Sports-gid_302.json",
-    # "idx_name2": "sequential_data-Sports-sid_1523.json",
-    "max_index1": 0,
-    "max_index2": 1364,
-    "idx_name1": "sequential_data-Yelp-gid_126.json",
-    "idx_name2": "sequential_data-Yelp-sid_1364.json",
-    # "index_type": "gid",
-    "index_type": "sid",
-    # "index_type": "both",
-    # "index_type": "cross",
-    "test_description_idx": 0,
-    "batch_size": 16,
-    "beam_size": 20,
-    "num_workers": 0,
-    "dropout": 0.1,
-    "data_dir": "data/amazon/filtered",
-    # "domain": "Beauty",
-    # "domain": "Sports_and_Outdoors",
-    # "domain": "Toys_and_Games",
-    "domain": "Yelp",
-    "max_length": 512,
-    "shuffle": True,
-    # "ckpt": "saved/models/Recommender/0517-Beauty-gid-1/model_best_5ep.pth",
-    # "ckpt": "saved/models/Recommender/0517-Beauty-gid-2/model_best_5ep.pth",
-    # "ckpt": "saved/models/Recommender/0517-Beauty-sid-1/model_best_3ep.pth",
-    # "ckpt": "saved/models/Recommender/0517-Beauty-sid-2/model_best_4ep.pth",
-    # "ckpt": "saved/models/Recommender/0517-sports-gid-1/model_best_4ep.pth",
-    # "ckpt": "saved/models/Recommender/0517-sports-gid-2/model_best_4ep.pth",
-    # "ckpt": "saved/models/Recommender/0517-sports-sid-1/model_best_4ep.pth",
-    # "ckpt": "saved/models/Recommender/0517-sports-sid-2/model_best_3ep.pth",
-    # "ckpt": "saved/models/Recommender/0517-yelp-gid-1/model_best_5ep.pth",
-    # "ckpt": "saved/models/Recommender/0517-yelp-gid-2/model_best_4ep.pth",
-    # "ckpt": "saved/models/Recommender/0517-yelp-sid-1/model_best_6ep.pth",
-    "ckpt": "saved/models/Recommender/0517-yelp-sid-2/model_best_5ep.pth",
-    ####
-    "use_prefix_trie": True,
-}
 
-print(f'start inference : {config["ckpt"]}, temp_num:{config["test_description_idx"]}')
+def scoring_f(x):
+    return np.exp(-x / 10)
 
-backbone = config['backbone']
-root_path = config['data_dir']
-t5_config = T5Config.from_pretrained(config['backbone'])
-beam_size = config['beam_size']
 
-tokenizer = AutoTokenizer.from_pretrained(config['backbone'])
-t5_config.vocab_size = len(tokenizer)
-codebook_size = config['codebook_size']
-code_length = config['code_length']
-new_tokens_g = []
-new_tokens_s = []
-for code in range(config['codebook_size']):
-    for level in range(config['code_length']):
-        new_token_g = f'<extra_g_{level}_{code}>'
-        new_tokens_g.append(new_token_g)
-        new_token_s = f'<extra_s_{level}_{code}>'
-        new_tokens_s.append(new_token_s)
-for extra_code_g in range(config['max_index1']):
-    new_token = f"<extra_g_{config['code_length']}_{extra_code_g}>"
-    new_tokens_g.append(new_token)
-for extra_code_s in range(config['max_index2']):
-    new_token = f"<extra_s_{config['code_length']}_{extra_code_s}>"
-    new_tokens_s.append(new_token)
-tokenizer.add_tokens(new_tokens_g)
-tokenizer.add_tokens(new_tokens_s)
-indicator = ['<G>', '<S>']
-tokenizer.add_tokens(indicator)
+def combine_f(candidates):
+    return 4 * candidates[0] + candidates[1]
 
-t5_config.vocab_size = len(tokenizer)
-model = T5SequentialRecommender(t5_config).from_pretrained(config['backbone'])
-model.resize_token_embeddings(t5_config.vocab_size)
-print(f'Load from pre-trained model: {config["ckpt"]}')
-print(f'total params:{sum(p.numel() for p in model.parameters())}')
 
-from prompt_p5 import task_subgroup_1
+def aggrergation_f(candidates):
+    return np.sum(candidates)
 
-infer_set = CrossDset(root_path, config['domain'], 'infer', tokenizer, templates=task_subgroup_1, gid_dict=config['idx_name1'], sid_dict=config['idx_name2'],
-                      test_description_idx=config['test_description_idx'], index_type=config['index_type'])
 
-if config['index_type'] == 'gid':
-    candidates = infer_set.g_items
-elif config['index_type'] == 'sid':
-    candidates = infer_set.s_items
-else:
-    if (config['test_description_idx'] == 0 or config['test_description_idx'] == 2):
-        candidates = infer_set.g_items
-    else:
-        candidates = infer_set.s_items
+def metric(rank_arr):
+    hit5 = sum(rank_arr[:5])
+    hit10 = sum(rank_arr[:10])
+    dcg_arr = 1 / np.log2(np.arange(2, 10 + 2))
+    dcg = rank_arr[:10] * dcg_arr
+    ndcg5 = sum(dcg[:5])
+    ndcg10 = sum(dcg[:10])
+    return hit5, hit10, ndcg5, ndcg10
 
-candidate_trie = Trie([[0] + tokenizer.encode(candidate) for candidate in candidates])
-prefix_allowed_tokens = prefix_allowed_tokens_fn(candidate_trie)
 
-infer_loader = DataLoader(infer_set, shuffle=False, batch_size=config['batch_size'], collate_fn=infer_set.collate_fn)
+def reranking(pred_c, pred_s, data_name, ceid_dict, seid_dict):
+    iid_gid = load_json(os.path.join('data', data_name, ceid_dict))
+    iid_sid = load_json(os.path.join('data', data_name, seid_dict))
+    gid_iid = defaultdict(list)
+    sid_iid = defaultdict(list)
+    idx_iid = defaultdict(list)
+    for key, v in iid_gid.items():
+        text = 'item_<C>'
+        for level, code in enumerate(v):
+            text += f'<extra_c_{level}_{code}>'
+        gid_iid[text] = key
+        idx_iid[text] = key
+    for key, v in iid_sid.items():
+        text = 'item_<S>'
+        for level, code in enumerate(v):
+            text += f'<extra_s_{level}_{code}>'
+        sid_iid[text] = key
+        idx_iid[text] = key
+    gt = idx_iid[pred_c[0][0]]
+    rank_c = {}
+    rank_s = {}
+    freq_c = {}
+    freq_s = {}
+    score = {}
+    for i, pred_i in enumerate(pred_c):
+        for rank, pred in enumerate(pred_i[1]):
+            if idx_iid[pred] in freq_c.keys():
+                freq_c[idx_iid[pred]] += 1
+                rank_c[idx_iid[pred]].append(rank)
+            else:
+                freq_c[idx_iid[pred]] = 1
+                rank_c[idx_iid[pred]] = [rank]
+    for i, pred_i in enumerate(pred_s):
+        for rank, pred in enumerate(pred_i[1]):
+            if idx_iid[pred] in freq_s.keys():
+                freq_s[idx_iid[pred]] += 1
+                rank_s[idx_iid[pred]].append(rank)
+            else:
+                freq_s[idx_iid[pred]] = 1
+                rank_s[idx_iid[pred]] = [rank]
 
-state_dict = torch.load(config['ckpt'], 'cpu')
-model.load_state_dict(state_dict.state_dict())
-print('load trained model')
-device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-model.to(device)
-model.eval()
-print(len(infer_loader))
+    for iid, rank_list in rank_c.items():
+        mean_rank = np.mean(rank_list)
+        position_score = scoring_f(mean_rank)
+        n = len(rank_list)
+        if n < 2:
+            var_x = 20 ** 2
+        else:
+            var_x = np.sum((np.array(rank_list) - mean_rank) ** 2) / (n - 1)
+        sstd = np.sqrt(var_x)
+        consistency_score = scoring_f(sstd)
+        score[iid] = combine_f([position_score, consistency_score])
 
-total_count = 0.
-decode_type = 'beam'
-with torch.no_grad():
-    pred_all = []
-    for i, batch in tqdm(enumerate(infer_loader)):
-        pred_outs = \
-            save_outputs(batch, model, prefix_allowed_tokens, k=beam_size, max_len=20, tokenizer=tokenizer)
-        pred_all.append(pred_outs)
-        total_count += batch['input_ids'].size(0)
+    for iid, rank_list in rank_s.items():
+        mean_rank = np.mean(rank_list)
+        position_score = scoring_f(mean_rank)
+        n = len(rank_list)
+        if n < 2:
+            var_x = 20 ** 2
+        else:
+            var_x = np.sum((np.array(rank_list) - mean_rank) ** 2) / (n - 1)
+        sstd = np.sqrt(var_x)
+        consistency_score = scoring_f(sstd)
+        if iid in score.keys():
+            score[iid] += combine_f([position_score, consistency_score])
+        else:
+            score[iid] = combine_f([position_score, consistency_score])
 
-# save test data correction list
-corr_all = sum(pred_all, [])
+    sorted_score = sorted(score.items(), key=lambda item: item[1], reverse=True)
+    candidates = [a for a, b in sorted_score[:10]]
+    corr_arr = gt == np.array(candidates)
+    return corr_arr
 
-with open(os.path.join('/'.join(config['ckpt'].split('/')[:-1]), f'prediction_list_{beam_size}_{config["test_description_idx"]}'),
-          'wb') as fOut:
-    pickle.dump(corr_all, fOut, protocol=pickle.HIGHEST_PROTOCOL)
+
+def inference(config):
+    print(f'start inference : {config["ckpt"]}')
+    root_path = config['data_dir']
+    t5_config = T5Config.from_pretrained('t5-small')
+    max_index1 = int(config['idx_name1'].split('_')[1])
+    max_index2 = int(config['idx_name2'].split('_')[1])
+    tokenizer = AutoTokenizer.from_pretrained('t5-small')
+    new_tokens_c = []
+    new_tokens_s = []
+    for code in range(config['codebook_size']):
+        for level in range(config['code_length']):
+            new_token_c = f'<extra_c_{level}_{code}>'
+            new_tokens_c.append(new_token_c)
+            new_token_s = f'<extra_s_{level}_{code}>'
+            new_tokens_s.append(new_token_s)
+    for extra_code_c in range(max_index1):
+        new_token = f"<extra_c_{config['code_length']}_{extra_code_c}>"
+        new_tokens_c.append(new_token)
+    for extra_code_s in range(max_index2):
+        new_token = f"<extra_s_{config['code_length']}_{extra_code_s}>"
+        new_tokens_s.append(new_token)
+    tokenizer.add_tokens(new_tokens_c)
+    tokenizer.add_tokens(new_tokens_s)
+    indicator = ['<C>', '<S>']
+    tokenizer.add_tokens(indicator)
+    t5_config.vocab_size = len(tokenizer)
+    model = T5SequentialRecommender(t5_config).from_pretrained('t5-small')
+    model.resize_token_embeddings(t5_config.vocab_size)
+    print(f'Load from pre-trained model: {config["ckpt"]}')
+    print(f'total params:{sum(p.numel() for p in model.parameters())}')
+
+    from prompt_p5 import task_subgroup_1
+    infer_set_c = SCRecDset(root_path, config['domain'], 'infer', tokenizer, templates=task_subgroup_1, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
+                            num_templates=config['num_templates'], test_instruction_type='ceid')
+    infer_set_s = SCRecDset(root_path, config['domain'], 'infer', tokenizer, templates=task_subgroup_1, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
+                            num_templates=config['num_templates'], test_instruction_type='seid')
+    candidates_c = infer_set_c.c_items
+    candidate_trie_c = Trie([[0] + tokenizer.encode(candidate) for candidate in candidates_c])
+    prefix_allowed_tokens_c = prefix_allowed_tokens_fn(candidate_trie_c)
+    infer_loader_c = DataLoader(infer_set_c, shuffle=False, batch_size=config['num_templates'], collate_fn=infer_set_c.collate_fn)
+
+    candidates_s = infer_set_s.s_items
+    candidate_trie_s = Trie([[0] + tokenizer.encode(candidate) for candidate in candidates_s])
+    prefix_allowed_tokens_s = prefix_allowed_tokens_fn(candidate_trie_s)
+    infer_loader_s = DataLoader(infer_set_s, shuffle=False, batch_size=config['num_templates'], collate_fn=infer_set_s.collate_fn)
+
+    state_dict = torch.load(config['ckpt'], 'cpu')
+    model.load_state_dict(state_dict.state_dict())
+    print('load trained model')
+    device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
+    model.to(device)
+    model.eval()
+    print(len(infer_loader_c))
+
+    with torch.no_grad():
+        pbar = tqdm(zip(infer_loader_c, infer_loader_s), desc="SC-Rec inference: ")
+        total_hit5 = 0.
+        total_hit10 = 0.
+        total_ndcg5 = 0.
+        total_ndcg10 = 0.
+        for i, batch in enumerate(pbar):
+            batch1, batch2 = batch
+            pred_outs_c = save_outputs(batch1, model, prefix_allowed_tokens_c, k=20, max_len=20, tokenizer=tokenizer)
+            pred_outs_s = save_outputs(batch2, model, prefix_allowed_tokens_s, k=20, max_len=20, tokenizer=tokenizer)
+            final_rank = reranking(pred_outs_c, pred_outs_s, config['domain'], config['idx_name1'], config['idx_name2'])
+            hit5, hit10, ndcg5, ndcg10 = metric(final_rank)
+            total_hit5 += hit5
+            total_hit10 += hit10
+            total_ndcg5 += ndcg5
+            total_ndcg10 += ndcg10
+            pbar.set_postfix({f'Hit@5': {total_hit5 / (i + 1)}, 'Hit@10': {total_hit10 / (i + 1)}, 'NDCG@5': {total_ndcg5 / (i + 1)}, 'NDCG@10': {total_ndcg10 / (i + 1)}})
+        print(f'Hit@5 : {total_hit5 / (i + 1)}, Hit@10 : {total_hit10 / (i + 1)}, NDCG@5 : {total_ndcg5 / (i + 1)}, NDCG@10 : {total_ndcg10 / (i + 1)}')
+        print('###############################################################')

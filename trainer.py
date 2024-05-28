@@ -10,32 +10,15 @@ import random
 import wandb
 from model.utils import *
 from transformers import AutoTokenizer
-from data_loader.amazon_loader import Dset, CrossDset
+from data_loader.seq_rec_loader import SCRecDset
 from prompt_p5 import task_subgroup_1
-
 import os
+from transformers import T5Config
+from transformers.optimization import get_linear_schedule_with_warmup
+from torch.optim import AdamW
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 os.environ["WANDB__SERVICE_WAIT"] = "100"
-
-
-#
-# def create_config(config):
-#     from transformers import T5Config
-#     config_class = T5Config
-#     t5_config = config_class.from_pretrained(config['backbone'])
-#     t5_config.dropout_rate = config['dropout']
-#     t5_config.dropout = config['dropout']
-#     t5_config.dense_act_fn = config['act_fn']
-#     t5_config.attention_dropout = config['dropout']
-#     t5_config.activation_dropout = config['dropout']
-#     t5_config.d_ff = config['T5Config']['d_ff']
-#     t5_config.d_kv = config['T5Config']['d_kv']
-#     t5_config.d_model = config['T5Config']['d_model']
-#     t5_config.num_decoder_layers = config['T5Config']['num_decoder_layers']
-#     t5_config.num_heads = config['T5Config']['num_heads']
-#     t5_config.num_layers = config['T5Config']['num_layers']
-#     return t5_config
 
 
 def create_model(model_class, backbone, t5_config=None):
@@ -44,8 +27,7 @@ def create_model(model_class, backbone, t5_config=None):
 
 
 def create_optimizer_and_scheduler(config, train_loader, model):
-    from transformers.optimization import get_linear_schedule_with_warmup
-    from torch.optim import AdamW
+
     steps_per_epoch = len(train_loader)
     t_total = steps_per_epoch * config['epoch']
     warmup_ratio = config['warmup_ratio']
@@ -85,13 +67,15 @@ def p5_runner(config):
     np.random.seed(SEED)
     random.seed(SEED)
     save_name = config['save_name']
-    # wandb logging
+
+    ############## wandb logging
     run = wandb.init(project=config['project_name'], reinit=True)
     now = datetime.now()
     save_dir = f'./saved/models/{config["project_name"]}/{save_name}/'
     name = save_name + now.strftime('-%Y-%m-%d-%H%M%S')
     wandb.run.name = name
     wandb.run.save()
+    ############
     # initialize save path
     if os.path.exists(save_dir):
         import shutil
@@ -99,72 +83,52 @@ def p5_runner(config):
     os.makedirs(save_dir)
     copyfile(config['config_name'], save_dir + config['config_name'])
     root_path = config['data_dir']
-    # prepare model, tokenizer for train
-    from transformers import T5Config
-    t5_config = T5Config.from_pretrained(config['backbone'])
-    tokenizer = AutoTokenizer.from_pretrained(config['backbone'])
-    new_tokens_g = []
+    t5_config = T5Config.from_pretrained('t5-small')
+    max_index1 = int(config['idx_name1'].split('_')[1])
+    max_index2 = int(config['idx_name2'].split('_')[1])
+    tokenizer = AutoTokenizer.from_pretrained('t5-small')
+    new_tokens_c = []
     new_tokens_s = []
     for code in range(config['codebook_size']):
         for level in range(config['code_length']):
-            new_token_g = f'<extra_g_{level}_{code}>'
-            new_tokens_g.append(new_token_g)
+            new_token_c = f'<extra_c_{level}_{code}>'
+            new_tokens_c.append(new_token_c)
             new_token_s = f'<extra_s_{level}_{code}>'
             new_tokens_s.append(new_token_s)
-    for extra_code_g in range(config['max_index1']):
-        new_token = f"<extra_g_{config['code_length']}_{extra_code_g}>"
-        new_tokens_g.append(new_token)
-    for extra_code_s in range(config['max_index2']):
+    for extra_code_c in range(max_index1):
+        new_token = f"<extra_c_{config['code_length']}_{extra_code_c}>"
+        new_tokens_c.append(new_token)
+    for extra_code_s in range(max_index2):
         new_token = f"<extra_s_{config['code_length']}_{extra_code_s}>"
         new_tokens_s.append(new_token)
-    tokenizer.add_tokens(new_tokens_g)
+    tokenizer.add_tokens(new_tokens_c)
     tokenizer.add_tokens(new_tokens_s)
-    indicator = ['<G>', '<S>']
+    indicator = ['<C>', '<S>']
     tokenizer.add_tokens(indicator)
-
     t5_config.vocab_size = len(tokenizer)
-    model = T5SequentialRecommender(t5_config).from_pretrained(config['backbone'])
+    model = T5SequentialRecommender(t5_config).from_pretrained('t5-small')
     model.resize_token_embeddings(t5_config.vocab_size)
     print(f'trainable params:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
 
     # data_loader
-    train_set = CrossDset(root_path, config['domain'], 'train', tokenizer, templates=task_subgroup_1, gid_dict=config['idx_name1'], sid_dict=config['idx_name2'], index_type=config['index_type'],
+    train_set = SCRecDset(root_path, config['domain'], 'train', tokenizer, templates=task_subgroup_1, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
                           seed=config['seed'])
-    val_set0 = CrossDset(root_path, config['domain'], 'val', tokenizer, templates=task_subgroup_1, gid_dict=config['idx_name1'], sid_dict=config['idx_name2'],
-                         test_description_idx=0, index_type=config['index_type'])
-    val_set1 = CrossDset(root_path, config['domain'], 'val', tokenizer, templates=task_subgroup_1, gid_dict=config['idx_name1'], sid_dict=config['idx_name2'],
-                         test_description_idx=1, index_type=config['index_type'])
-    val_set2 = CrossDset(root_path, config['domain'], 'val', tokenizer, templates=task_subgroup_1, gid_dict=config['idx_name1'], sid_dict=config['idx_name2'],
-                         test_description_idx=2, index_type=config['index_type'])
-    val_set3 = CrossDset(root_path, config['domain'], 'val', tokenizer, templates=task_subgroup_1, gid_dict=config['idx_name1'], sid_dict=config['idx_name2'],
-                         test_description_idx=3, index_type=config['index_type'])
-    # tset = CrossDset(root_path, domain, 'test', tokenizer, templates=task_subgroup_1, gid_dict=idx_name1, sid_dict=idx_name2, soft_prompt_len=0, description_idx=0)
+    val_set0 = SCRecDset(root_path, config['domain'], 'val', tokenizer, templates=task_subgroup_1, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
+                         test_instruction_type='ceid')
+    val_set1 = SCRecDset(root_path, config['domain'], 'val', tokenizer, templates=task_subgroup_1, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
+                         test_instruction_type='seid')
 
     train_loader = DataLoader(train_set, shuffle=True, batch_size=config['batch_size'],
                               collate_fn=train_set.collate_fn, num_workers=config['num_workers'])
     val_loader0 = DataLoader(val_set0, batch_size=config['test_batch_size'], collate_fn=val_set0.collate_fn, num_workers=config['num_workers'])
     val_loader1 = DataLoader(val_set1, batch_size=config['test_batch_size'], collate_fn=val_set1.collate_fn, num_workers=config['num_workers'])
-    val_loader2 = DataLoader(val_set2, batch_size=config['test_batch_size'], collate_fn=val_set2.collate_fn, num_workers=config['num_workers'])
-    val_loader3 = DataLoader(val_set3, batch_size=config['test_batch_size'], collate_fn=val_set3.collate_fn, num_workers=config['num_workers'])
     val_loaders = []
-    if config['index_type'] == 'cross':
-        val_loaders.append(val_loader0)
-        val_loaders.append(val_loader1)
-        val_loaders.append(val_loader2)
-        val_loaders.append(val_loader3)
-    elif config['index_type'] == 'both':
-        val_loaders.append(val_loader0)
-        val_loaders.append(val_loader1)
-    elif config['index_type'] == 'gid':
-        val_loaders.append(val_loader0)
-    elif config['index_type'] == 'sid':
-        val_loaders.append(val_loader0)
-    else:
-        raise NotImplementedError
+    val_loaders.append(val_loader0)
+    val_loaders.append(val_loader1)
 
-    candidates_g = train_set.g_items
-    candidate_trie_g = Trie([[0] + tokenizer.encode(candidate) for candidate in candidates_g])
-    prefix_allowed_tokens_g = prefix_allowed_tokens_fn(candidate_trie_g)
+    candidates_c = train_set.c_items
+    candidate_trie_c = Trie([[0] + tokenizer.encode(candidate) for candidate in candidates_c])
+    prefix_allowed_tokens_c = prefix_allowed_tokens_fn(candidate_trie_c)
 
     candidates_s = train_set.s_items
     candidate_trie_s = Trie([[0] + tokenizer.encode(candidate) for candidate in candidates_s])
@@ -196,8 +160,8 @@ def p5_runner(config):
         print('###############################################################')
         wandb.log({"train_loss": train_loss / step, 'epoch': epoch})
         wandb.log({"lr": lr, 'epoch': epoch})
+
         # validation
-        print('evaluation ')
         model.eval()
         with torch.no_grad():
             mean_hit_5 = 0
@@ -212,16 +176,10 @@ def p5_runner(config):
                 ndcg_validation_10 = 0
                 validation_total = 0
                 val_loss = 0
-                if config['index_type'] == 'gid':
-                    constraint = prefix_allowed_tokens_g
-                elif config['index_type'] == 'sid':
-                    constraint = prefix_allowed_tokens_s
+                if loader_idx % 2 == 0:
+                    constraint = prefix_allowed_tokens_c
                 else:
-                    if loader_idx % 2 == 0:
-                        constraint = prefix_allowed_tokens_g
-                    else:
-                        constraint = prefix_allowed_tokens_s
-
+                    constraint = prefix_allowed_tokens_s
                 for step_i, batch in tqdm(enumerate(val_loaders[loader_idx])):
                     results = model.valid_step(batch)
                     loss = results['loss']
@@ -234,7 +192,6 @@ def p5_runner(config):
                     ndcg_validation_5 += one_ndcg_5
                     ndcg_validation_10 += one_ndcg_10
                     validation_total += batch['input_ids'].size(0)
-                hit_1 = round(correct_validation_1 / validation_total, 4)
                 hit_5 = round(correct_validation_5 / validation_total, 4)
                 hit_10 = round(correct_validation_10 / validation_total, 4)
                 ndcg_5 = round(ndcg_validation_5 / validation_total, 4)
@@ -245,7 +202,7 @@ def p5_runner(config):
                 mean_ndcg_10 += ndcg_10
                 print(f'validation_{loader_idx}: {epoch + 1} val loss: {val_loss / step_i}')
                 wandb.log({"val_loss": val_loss / step_i, 'epoch': epoch})
-                print(f'hit@1: {hit_1}, hit@5: {hit_5}, hit@10: {hit_10}, ndcg@5: {ndcg_5}, ndcg@10: {ndcg_10}')
+                print(f'hit@5: {hit_5}, hit@10: {hit_10}, ndcg@5: {ndcg_5}, ndcg@10: {ndcg_10}')
                 print('###############################################################')
             hit_5 = mean_hit_5 / len(val_loaders)
             hit_10 = mean_hit_10 / len(val_loaders)
@@ -255,7 +212,6 @@ def p5_runner(config):
             wandb.log({"hit@10": hit_10, 'epoch': epoch})
             wandb.log({"ndcg@5": ndcg_5, 'epoch': epoch})
             wandb.log({"ndcg@10": ndcg_10, 'epoch': epoch})
-
             if ndcg_10 > best_ndcg:
                 best_ndcg = ndcg_10
                 if os.path.isfile(ckpt_path):

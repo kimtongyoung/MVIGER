@@ -1,0 +1,10 @@
+{
+  "data_dir": "data/",
+  "domain": "Beauty",
+  "ckpt": "saved/Beauty/model_best_8ep.pth",
+  "code_length": 3,
+  "codebook_size": 256,
+  "idx_name1": "ceid_253_.json",
+  "idx_name2": "seid_949_.json",
+  "num_templates": 10
+}
