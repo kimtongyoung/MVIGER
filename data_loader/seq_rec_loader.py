@@ -24,7 +24,7 @@ class SCRecDset(Dataset):
         self.user_list = []
         self.train_seq = []
         self.whole_seq = []
-        self.task_instruction = ['Given <G> Predict <G>', 'Given <S> Predict <S>']
+        self.task_instruction = ['Given <C> Predict <C>', 'Given <S> Predict <S>']
         if test_instruction_type == 'ceid':
             self.test_instruction_idx = 0
         elif test_instruction_type == 'seid':
