@@ -80,24 +80,7 @@ def metric(rank_arr):
     return hit5, hit10, ndcg5, ndcg10
 
 
-def reranking(pred_c, pred_s, data_name, ceid_dict, seid_dict):
-    iid_gid = load_json(os.path.join('data', data_name, ceid_dict))
-    iid_sid = load_json(os.path.join('data', data_name, seid_dict))
-    gid_iid = defaultdict(list)
-    sid_iid = defaultdict(list)
-    idx_iid = defaultdict(list)
-    for key, v in iid_gid.items():
-        text = 'item_<C>'
-        for level, code in enumerate(v):
-            text += f'<extra_c_{level}_{code}>'
-        gid_iid[text] = key
-        idx_iid[text] = key
-    for key, v in iid_sid.items():
-        text = 'item_<S>'
-        for level, code in enumerate(v):
-            text += f'<extra_s_{level}_{code}>'
-        sid_iid[text] = key
-        idx_iid[text] = key
+def reranking(pred_c, pred_s, idx_iid):
     gt = idx_iid[pred_c[0][0]]
     rank_c = {}
     rank_s = {}
@@ -208,6 +191,24 @@ def inference(config):
     model.eval()
     print(len(infer_loader_c))
 
+    iid_gid = load_json(os.path.join('data', config['domain'], config['idx_name1']))
+    iid_sid = load_json(os.path.join('data', config['domain'], config['idx_name2']))
+    gid_iid = defaultdict(list)
+    sid_iid = defaultdict(list)
+    idx_iid = defaultdict(list)
+    for key, v in iid_gid.items():
+        text = 'item_<C>'
+        for level, code in enumerate(v):
+            text += f'<extra_c_{level}_{code}>'
+        gid_iid[text] = key
+        idx_iid[text] = key
+    for key, v in iid_sid.items():
+        text = 'item_<S>'
+        for level, code in enumerate(v):
+            text += f'<extra_s_{level}_{code}>'
+        sid_iid[text] = key
+        idx_iid[text] = key
+
     with torch.no_grad():
         pbar = tqdm(zip(infer_loader_c, infer_loader_s), desc="SC-Rec inference: ")
         total_hit5 = 0.
@@ -218,7 +219,7 @@ def inference(config):
             batch1, batch2 = batch
             pred_outs_c = save_outputs(batch1, model, prefix_allowed_tokens_c, k=20, max_len=20, tokenizer=tokenizer)
             pred_outs_s = save_outputs(batch2, model, prefix_allowed_tokens_s, k=20, max_len=20, tokenizer=tokenizer)
-            final_rank = reranking(pred_outs_c, pred_outs_s, config['domain'], config['idx_name1'], config['idx_name2'])
+            final_rank = reranking(pred_outs_c, pred_outs_s, idx_iid)
             hit5, hit10, ndcg5, ndcg10 = metric(final_rank)
             total_hit5 += hit5
             total_hit10 += hit10
