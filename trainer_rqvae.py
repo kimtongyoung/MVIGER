@@ -1,24 +1,22 @@
-import pdb
-import torch.nn.functional
-from torch.utils.data import DataLoader
-from datetime import datetime
-from shutil import copyfile
-import random
-import wandb
-from tqdm import tqdm
-from model.rqvae4rec import *
-from transformers.optimization import get_linear_schedule_with_warmup, get_constant_schedule_with_warmup
-from torch.optim import AdamW, Adagrad
-from collections import defaultdict
-
-
 import json
+import random
+from collections import defaultdict
+from shutil import copyfile
+import wandb
+import torch.nn.functional
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
+from tqdm import tqdm
+from transformers.optimization import get_linear_schedule_with_warmup
+from model.rqvae4rec import *
+from datetime import datetime
 
 
 def save_json(dict, path):
     json_str = json.dumps(dict)
     with open(path, 'w') as out:
         out.write(json_str)
+
 
 def generate_dict(codebook_size, code_length):
     lv_dict = {}
@@ -40,7 +38,7 @@ def calc_div(lv_dict, code_length, codebook_size):
     dev = []
     for length in range(code_length):
         temp = []
-        for i in range(codebook_size[length]):
+        for i in range(codebook_size):
             temp.append(lv_dict[length + 1][i])
         dev.append(temp)
 
@@ -63,7 +61,7 @@ def create_optimizer_and_scheduler(config, train_loader, model):
     print("Warm up Iters: %d" % warmup_iters)
 
     optimizer_grouped_parameters = [{"params": [p for n, p in model.named_parameters()]}]
-    optim = AdamW(optimizer_grouped_parameters, lr=config['lr'])
+    optim = AdamW(optimizer_grouped_parameters, lr=config['lr'], weight_decay=0)
     lr_scheduler = get_linear_schedule_with_warmup(optim, warmup_iters, t_total)
 
     return optim, lr_scheduler
@@ -92,8 +90,14 @@ def rqvae_runner(config):
     np.random.seed(SEED)
     random.seed(SEED)
 
-    save_name = config['save_name']
-    save_dir = f'./saved/models/{config["project_name"]}/{config["domain"]}_{save_name}/'
+    save_name = config['domain']+'-'+config['save_name']
+    save_dir = f'./saved/models/{config["project_name"]}/{save_name}/'
+    ############## wandb logging
+    run = wandb.init(project=config['project_name'], reinit=True)
+    now = datetime.now()
+    name = save_name + now.strftime('-%Y-%m-%d-%H%M%S')
+    wandb.run.name = name
+    wandb.run.save()
 
     if os.path.exists(save_dir):
         import shutil
@@ -104,29 +108,29 @@ def rqvae_runner(config):
 
     model = RQVAE(config['rqvae_config'])
     print(f'trainable params:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
+    print(f'training {save_name}')
+
 
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
     model.to(device)
 
     # data_loader
     if config['rqvae_config']['embedding_type'] == 'ceid':
-        dset = CEIDEmbeddingLoader(config['rqvae_config'], user=False)
+        dset = CEIDEmbeddingLoader(config['rqvae_config'])
 
-    elif config['rqvae_config']['embedding_type'] == 'seid':
+    else:
         dset = SEIDEmbeddingLoader(config['rqvae_config'])
 
-    loader = DataLoader(dset, shuffle=True, batch_size=config['batch_size'],
-                        collate_fn=dset.collate_fn)
+    loader = DataLoader(dset, shuffle=True, batch_size=config['batch_size'], collate_fn=dset.collate_fn)
     optim, lr_scheduler = create_optimizer_and_scheduler(config, loader, model)
 
-    ckpt_path = os.path.join(save_dir, f'model_best_1ep.pth')
     for epoch in tqdm(range(config['epoch'])):
         # train
         model.train()
         train_loss = 0.
         recon_loss = 0.
         latent_loss = 0.
-        for step_t, batch in enumerate(loader):
+        for step_t, batch in enumerate(loader, start=1):
             inp = batch['input_emb'].to(device)
             outputs = model(inp)
             outputs = model.compute_loss(*outputs, x=inp)
@@ -138,12 +142,47 @@ def rqvae_runner(config):
             latent_loss += loss_latent
             optim.zero_grad()
             loss.backward()
+            if config['grad_clip'] != 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), config['grad_clip'])
             optim.step()
             lr_scheduler.step()
             lr = lr_scheduler.get_last_lr()[0]
+
+        model.eval()
+        code_outs = []
+        with torch.no_grad():
+            for step_v, batch in enumerate(loader):
+                inp = batch['input_emb'].to(device)
+                codes = model.get_codes(inp)
+                code_outs.append(codes)
+        total_code_tensor = torch.cat(code_outs, 0)
+
+        collision_num, calc_dict = calc_collision_num(total_code_tensor)
+        code_length = config['code_length']
+        codebook_size = config['codebook_size']
+        lv_dict = generate_dict(codebook_size, code_length)
+        lv_dict = count_dict(total_code_tensor, lv_dict, code_length)
+
+        std_list, count = calc_div(lv_dict, code_length, codebook_size)
+        std = np.mean(std_list)
+        per = calc_percent(count)
+        # pdb.set_trace()
+
+        print(f'{epoch + 1} train loss: {train_loss / step_t}, recon: {recon_loss / step_t}, latent: {latent_loss / step_t} last_lr: {lr}')
+        print(f' std: {std}, std_list: {std_list}')
+        print(f' collision_num: {collision_num}, lv usage: {per}')
+        print('###############################################################')
+        wandb.log({"train_loss": train_loss / step_t, 'epoch': epoch})
+        wandb.log({"recon_loss": recon_loss / step_t, 'epoch': epoch})
+        wandb.log({"latent_loss": latent_loss / step_t, 'epoch': epoch})
+        wandb.log({"collision_num": collision_num, 'epoch': epoch})
+        wandb.log({"lr": lr, 'epoch': epoch})
+        for length in range(code_length):
+            wandb.log({f"lv{length + 1} usage": per[length], 'epoch': epoch})
         if (epoch + 1) % 100 == 0:
             torch.save(model.state_dict(), f'{save_dir}model_{epoch + 1}ep.pth')
 
+    run.finish()
 
     model = RQVAE(config['rqvae_config'])
     state_dict = torch.load(f'{save_dir}model_{config["epoch"]}ep.pth', 'cpu')
@@ -152,10 +191,8 @@ def rqvae_runner(config):
     model.to(device)
     model.eval()
 
-
     item_idx_list = []
     code_outs = []
-    total_count = 0
     with torch.no_grad():
         for i, batch in tqdm(enumerate(loader)):
             inp = batch['input_emb'].to(device)
@@ -163,8 +200,6 @@ def rqvae_runner(config):
             item_idx = batch['item_idx']
             item_idx_list.append(item_idx)
             code_outs.append(codes)
-            batch_size = inp.size(0)
-            total_count += batch['input_emb'].size(0)
 
     total_code_tensor = torch.cat(code_outs, 0)
 
@@ -172,7 +207,6 @@ def rqvae_runner(config):
     code_length = config['code_length']
     lv_dict = generate_dict(codebook_size, code_length)
     lv_dict = count_dict(total_code_tensor, lv_dict, code_length)
-
 
     def create_code_dict(item_idx_list, total_code_tensor):
         code_dict = {}
@@ -192,22 +226,21 @@ def rqvae_runner(config):
             raw_id = ','.join([str(c) for c in code])
             if raw_id not in id_count:
                 id_count[raw_id] = 1
-                idx = raw_id + ',0'
+                idx = raw_id + ',Leaf0'
                 idx = idx.split(',')
-                res_out[iid] = np.array(idx, dtype=int).tolist()
+                res_out[iid] = idx
             else:
                 id_count[raw_id] += 1
-                idx = raw_id + f',{collision_idx}'
+                idx = raw_id + f',Leaf{collision_idx}'
                 collision_idx += 1
                 idx = idx.split(',')
-                res_out[iid] = np.array(idx, dtype=int).tolist()
+                res_out[iid] = idx
         print(collision_idx)
         return res_out, collision_idx
 
-
     res_out, collision_idx = collision_handling(result)
 
-    path = f'data/{config["domain"]}/{save_name}_{collision_idx}_.json'
+    path = f'data/amazon/filtered/{config["domain"]}/sequential-data-{save_name}_{collision_idx}_.json'
     save_json(res_out, path)
 
     print(f'ID is created at : {path}, with extra {collision_idx}  tokens')

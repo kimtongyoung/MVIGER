@@ -1,4 +1,7 @@
 import copy
+import pdb
+from typing import Optional, Tuple, Union
+import copy
 from typing import Optional, Tuple, Union
 from transformers import T5PreTrainedModel
 import torch
@@ -15,18 +18,23 @@ class T5CustomEncoder(T5PreTrainedModel):
         super().__init__(config)
         self.embed_tokens = embed_tokens
         self.is_decoder = config.is_decoder
+
         self.block = nn.ModuleList(
             [T5Block(config, has_relative_attention_bias=bool(i == 0)) for i in range(config.num_layers)]
         )
         self.final_layer_norm = T5LayerNorm(config.d_model, eps=config.layer_norm_epsilon)
         self.dropout = nn.Dropout(config.dropout_rate)
         self.whole_word_embedding = nn.Embedding(512, config.d_model)
+
+        # Initialize weights and apply final processing
         self.post_init()
+        # Model parallel
         self.model_parallel = False
         self.device_map = None
         self.gradient_checkpointing = False
 
     def parallelize(self, device_map=None):
+        # Check validity of device_map
         self.device_map = (
             get_device_map(len(self.block), range(torch.cuda.device_count())) if device_map is None else device_map
         )
@@ -34,11 +42,15 @@ class T5CustomEncoder(T5PreTrainedModel):
         self.model_parallel = True
         self.first_device = "cpu" if "cpu" in self.device_map.keys() else "cuda:" + str(min(self.device_map.keys()))
         self.last_device = "cuda:" + str(max(self.device_map.keys()))
+        # Load onto devices
         for k, v in self.device_map.items():
             for layer in v:
                 cuda_device = "cuda:" + str(k)
                 self.block[layer] = self.block[layer].to(cuda_device)
+
+        # Set embed_tokens to first layer
         self.embed_tokens = self.embed_tokens.to(self.first_device)
+        # Set final layer norm to last device
         self.final_layer_norm = self.final_layer_norm.to(self.last_device)
 
     def deparallelize(self):
@@ -74,6 +86,7 @@ class T5CustomEncoder(T5PreTrainedModel):
             output_hidden_states=None,
             return_dict=None,
     ):
+        # Model parallel
         if self.model_parallel:
             torch.cuda.set_device(self.first_device)
             self.embed_tokens = self.embed_tokens.to(self.first_device)
@@ -83,6 +96,7 @@ class T5CustomEncoder(T5PreTrainedModel):
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
         if input_ids is not None and inputs_embeds is not None:
             err_msg_prefix = "decoder_" if self.is_decoder else ""
             raise ValueError(
@@ -96,14 +110,21 @@ class T5CustomEncoder(T5PreTrainedModel):
         else:
             err_msg_prefix = "decoder_" if self.is_decoder else ""
             raise ValueError(f"You have to specify either {err_msg_prefix}input_ids or {err_msg_prefix}inputs_embeds")
+
         if inputs_embeds is None:
             assert self.embed_tokens is not None, "You have to initialize the model with valid token embeddings"
             inputs_embeds = self.embed_tokens(input_ids)
+
         inputs_embeds = inputs_embeds + self.whole_word_embedding(whole_item_ids)
+
         batch_size, seq_length = input_shape
+
+        # required mask seq length can be calculated via length of past
         mask_seq_length = past_key_values[0][0].shape[2] + seq_length if past_key_values is not None else seq_length
+
         if use_cache is True:
             assert self.is_decoder, f"`use_cache` can only be set to `True` if {self} is used as a decoder"
+
         if attention_mask is None:
             attention_mask = torch.ones(batch_size, mask_seq_length, device=inputs_embeds.device)
         if self.is_decoder and encoder_attention_mask is None and encoder_hidden_states is not None:
@@ -111,9 +132,17 @@ class T5CustomEncoder(T5PreTrainedModel):
             encoder_attention_mask = torch.ones(
                 batch_size, encoder_seq_length, device=inputs_embeds.device, dtype=torch.long
             )
+
+        # initialize past_key_values with `None` if past does not exist
         if past_key_values is None:
             past_key_values = [None] * len(self.block)
+
+        # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
+        # ourselves in which case we just need to make it broadcastable to all heads.
         extended_attention_mask = self.get_extended_attention_mask(attention_mask, input_shape, inputs_embeds.device)
+
+        # If a 2D or 3D attention mask is provided for the cross-attention
+        # we need to make broadcastable to [batch_size, num_heads, seq_length, seq_length]
         if self.is_decoder and encoder_hidden_states is not None:
             encoder_batch_size, encoder_sequence_length, _ = encoder_hidden_states.size()
             encoder_hidden_shape = (encoder_batch_size, encoder_sequence_length)
@@ -122,6 +151,8 @@ class T5CustomEncoder(T5PreTrainedModel):
             encoder_extended_attention_mask = self.invert_attention_mask(encoder_attention_mask)
         else:
             encoder_extended_attention_mask = None
+
+        # Prepare head mask if needed
         head_mask = self.get_head_mask(head_mask, self.config.num_layers)
         cross_attn_head_mask = self.get_head_mask(cross_attn_head_mask, self.config.num_layers)
         present_key_value_states = () if use_cache else None
@@ -130,12 +161,16 @@ class T5CustomEncoder(T5PreTrainedModel):
         all_cross_attentions = () if (output_attentions and self.is_decoder) else None
         position_bias = None
         encoder_decoder_position_bias = None
+
         hidden_states = self.dropout(inputs_embeds)
+
         for i, (layer_module, past_key_value) in enumerate(zip(self.block, past_key_values)):
             layer_head_mask = head_mask[i]
             cross_attn_layer_head_mask = cross_attn_head_mask[i]
+            # Model parallel
             if self.model_parallel:
                 torch.cuda.set_device(hidden_states.device)
+                # Ensure that attention_mask is always on the same device as hidden_states
                 if attention_mask is not None:
                     attention_mask = attention_mask.to(hidden_states.device)
                 if position_bias is not None:
@@ -152,6 +187,7 @@ class T5CustomEncoder(T5PreTrainedModel):
                     cross_attn_layer_head_mask = cross_attn_layer_head_mask.to(hidden_states.device)
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
+
             if self.gradient_checkpointing and self.training:
                 if use_cache:
                     use_cache = False
@@ -172,7 +208,7 @@ class T5CustomEncoder(T5PreTrainedModel):
                     encoder_decoder_position_bias,
                     layer_head_mask,
                     cross_attn_layer_head_mask,
-                    None,
+                    None,  # past_key_value is always None with gradient checkpointing
                 )
             else:
                 layer_outputs = layer_module(
@@ -188,26 +224,42 @@ class T5CustomEncoder(T5PreTrainedModel):
                     use_cache=use_cache,
                     output_attentions=output_attentions,
                 )
+
+            # layer_outputs is a tuple with:
+            # hidden-states, key-value-states, (self-attention position bias), (self-attention weights), (cross-attention position bias), (cross-attention weights)
             if use_cache is False:
                 layer_outputs = layer_outputs[:1] + (None,) + layer_outputs[1:]
+
             hidden_states, present_key_value_state = layer_outputs[:2]
+
+            # We share the position biases between the layers - the first layer store them
+            # layer_outputs = hidden-states, key-value-states (self-attention position bias), (self-attention weights),
+            # (cross-attention position bias), (cross-attention weights)
             position_bias = layer_outputs[2]
             if self.is_decoder and encoder_hidden_states is not None:
                 encoder_decoder_position_bias = layer_outputs[4 if output_attentions else 3]
+            # append next layer key value states
             if use_cache:
                 present_key_value_states = present_key_value_states + (present_key_value_state,)
+
             if output_attentions:
                 all_attentions = all_attentions + (layer_outputs[3],)
                 if self.is_decoder:
                     all_cross_attentions = all_cross_attentions + (layer_outputs[5],)
+
+            # Model Parallel: If it's the last layer for that device, put things on the next device
             if self.model_parallel:
                 for k, v in self.device_map.items():
                     if i == v[-1] and "cuda:" + str(k) != self.last_device:
                         hidden_states = hidden_states.to("cuda:" + str(k + 1))
+
         hidden_states = self.final_layer_norm(hidden_states)
         hidden_states = self.dropout(hidden_states)
+
+        # Add last layer
         if output_hidden_states:
             all_hidden_states = all_hidden_states + (hidden_states,)
+
         if not return_dict:
             return tuple(
                 v
@@ -243,18 +295,25 @@ class T5SequentialRecommender(T5PreTrainedModel):
         super().__init__(config)
         self.model_dim = config.d_model
         self.shared = nn.Embedding(config.vocab_size, config.d_model)
+
         encoder_config = copy.deepcopy(config)
         encoder_config.is_decoder = False
         encoder_config.use_cache = False
         encoder_config.is_encoder_decoder = False
         self.encoder = T5CustomEncoder(encoder_config, self.shared)
+
         decoder_config = copy.deepcopy(config)
         decoder_config.is_decoder = True
         decoder_config.is_encoder_decoder = False
         decoder_config.num_layers = config.num_decoder_layers
         self.decoder = T5Stack(decoder_config, self.shared)
+
         self.lm_head = nn.Linear(config.d_model, config.vocab_size, bias=False)
+
+        # Initialize weights and apply final processing
         self.post_init()
+
+        # Model parallel
         self.model_parallel = False
         self.device_map = None
 
@@ -320,12 +379,18 @@ class T5SequentialRecommender(T5PreTrainedModel):
             output_hidden_states: Optional[bool] = None,
             return_dict: Optional[bool] = None,
     ) -> Union[Tuple[torch.FloatTensor], Seq2SeqLMOutput]:
+
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        # FutureWarning: head_mask was separated into two input args - head_mask, decoder_head_mask
         if head_mask is not None and decoder_head_mask is None:
             if self.config.num_layers == self.config.num_decoder_layers:
                 decoder_head_mask = head_mask
+
+        # Encode if needed (training, first prediction pass)
         if encoder_outputs is None:
+            # Convert encoder inputs in embeddings if needed
             encoder_outputs = self.encoder(
                 input_ids=input_ids,
                 whole_item_ids=whole_item_ids,
@@ -334,19 +399,26 @@ class T5SequentialRecommender(T5PreTrainedModel):
                 inputs_embeds=inputs_embeds,
                 output_attentions=output_attentions,
                 output_hidden_states=output_hidden_states,
-                return_dict=return_dict
+                return_dict=return_dict,
             )
+
         elif return_dict and not isinstance(encoder_outputs, BaseModelOutput):
             encoder_outputs = BaseModelOutput(
                 last_hidden_state=encoder_outputs[0],
                 hidden_states=encoder_outputs[1] if len(encoder_outputs) > 1 else None,
                 attentions=encoder_outputs[2] if len(encoder_outputs) > 2 else None,
             )
+
         hidden_states = encoder_outputs[0]
+
         if self.model_parallel:
             torch.cuda.set_device(self.decoder.first_device)
+
         if labels is not None and decoder_input_ids is None and decoder_inputs_embeds is None:
+            # get decoder inputs from shifting lm labels to the right
             decoder_input_ids = self._shift_right(labels)
+
+        # Set device for model parallelism
         if self.model_parallel:
             torch.cuda.set_device(self.decoder.first_device)
             hidden_states = hidden_states.to(self.decoder.first_device)
@@ -356,6 +428,8 @@ class T5SequentialRecommender(T5PreTrainedModel):
                 attention_mask = attention_mask.to(self.decoder.first_device)
             if decoder_attention_mask is not None:
                 decoder_attention_mask = decoder_attention_mask.to(self.decoder.first_device)
+
+        # Decode
         decoder_outputs = self.decoder(
             input_ids=decoder_input_ids,
             attention_mask=decoder_attention_mask,
@@ -370,21 +444,31 @@ class T5SequentialRecommender(T5PreTrainedModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
         )
+
         sequence_output = decoder_outputs[0]
+
+        # Set device for model parallelism
         if self.model_parallel:
             torch.cuda.set_device(self.encoder.first_device)
             self.lm_head = self.lm_head.to(self.encoder.first_device)
             sequence_output = sequence_output.to(self.lm_head.weight.device)
+
         if self.config.tie_word_embeddings:
+            # Rescale output before projecting on vocab
+            # See https://github.com/tensorflow/mesh/blob/fa19d69eafc9a482aff0b59ddd96b025c0cb207d/mesh_tensorflow/transformer/transformer.py#L586
             sequence_output = sequence_output * (self.model_dim ** -0.5)
+
         lm_logits = self.lm_head(sequence_output)
+
         loss = None
         if labels is not None:
             loss_fct = CrossEntropyLoss(ignore_index=-100)
             loss = loss_fct(lm_logits.view(-1, lm_logits.size(-1)), labels.view(-1))
+
         if not return_dict:
             output = (lm_logits,) + decoder_outputs[1:] + encoder_outputs
             return ((loss,) + output) if loss is not None else output
+
         return Seq2SeqLMOutput(
             loss=loss,
             logits=lm_logits,
@@ -396,6 +480,7 @@ class T5SequentialRecommender(T5PreTrainedModel):
             encoder_hidden_states=encoder_outputs.hidden_states,
             encoder_attentions=encoder_outputs.attentions,
         )
+
     def prepare_inputs_for_generation(
             self,
             input_ids,
@@ -408,8 +493,11 @@ class T5SequentialRecommender(T5PreTrainedModel):
             encoder_outputs=None,
             **kwargs
     ):
+
+        # cut decoder_input_ids if past is used
         if past_key_values is not None:
             input_ids = input_ids[:, -1:]
+
         return {
             "decoder_input_ids": input_ids,
             "past_key_values": past_key_values,
@@ -425,44 +513,86 @@ class T5SequentialRecommender(T5PreTrainedModel):
         return self._shift_right(labels)
 
     def _reorder_cache(self, past, beam_idx):
+        # if decoder past is not included in output
+        # speedy decoding is disabled and no need to reorder
         if past is None:
             return past
+
         reordered_decoder_past = ()
         for layer_past_states in past:
+            # get the correct batch idx from layer past batch dim
+            # batch dim of `past` is at 2nd position
             reordered_layer_past_states = ()
             for layer_past_state in layer_past_states:
+                # need to set correct `past` for each of the four key / value states
                 reordered_layer_past_states = reordered_layer_past_states + (
                     layer_past_state.index_select(0, beam_idx.to(layer_past_state.device)),
                 )
+
             assert reordered_layer_past_states[0].shape == layer_past_states[0].shape
             assert len(reordered_layer_past_states) == len(layer_past_states)
+
             reordered_decoder_past = reordered_decoder_past + (reordered_layer_past_states,)
         return reordered_decoder_past
 
-    def train_step(self, batch):
+    def train_step(self, batch, bpr=False):
         device = next(self.parameters()).device
         input_ids = batch['input_ids'].to(device)
         whole_item_ids = batch["whole_item_ids"].to(device)
         lm_labels = batch["target_ids"].to(device)
+        neg_labels = batch['neg_ids'].to(device)
         attention_mask = input_ids.ne(0).to(dtype=torch.float32, device=device)
+
         output = self(
             input_ids=input_ids,
             whole_item_ids=whole_item_ids,
             attention_mask=attention_mask,
             labels=lm_labels,
-            return_dict=True
-        )
+            return_dict=True)
+        pos_logits = output.logits.clone()
+        pos_labels = lm_labels.clone()
+
         lm_mask = lm_labels != -100
         lm_mask = lm_mask.float()
+        pos_mask = lm_mask.clone()
+
         B, L = lm_labels.size()
         loss_fct = CrossEntropyLoss(ignore_index=-100, reduction="none")
         loss = loss_fct(output.logits.view(-1, output.logits.size(-1)), lm_labels.view(-1))
         loss = loss.view(B, L) * lm_mask
         loss = loss.sum(dim=1) / lm_mask.sum(dim=1).clamp(min=1)
+
         results = {}
         results['loss'] = loss.mean()
-        results['total_loss'] = loss.detach().sum()
-        results['total_loss_count'] = len(loss)
+        # results['total_loss'] = loss.detach().sum()
+        # results['total_loss_count'] = len(loss)
+
+        if bpr:
+            neg_output = self(
+                input_ids=input_ids,
+                whole_item_ids=whole_item_ids,
+                attention_mask=attention_mask,
+                labels=neg_labels,
+                return_dict=True)
+            neg_mask = neg_labels != -100
+            neg_mask = neg_mask.float()
+
+            pos_probs = nn.functional.softmax(pos_logits, dim=-1)
+            neg_probs = nn.functional.softmax(neg_output.logits, dim=-1)
+
+            epsilon = 1e-6
+
+            pos_token_probs = torch.clamp(pos_probs.gather(-1, torch.abs(pos_labels).unsqueeze(-1)).squeeze(-1) * pos_mask, min=epsilon)
+            neg_token_probs = torch.clamp(neg_probs.gather(-1, torch.abs(neg_labels).unsqueeze(-1)).squeeze(-1) * neg_mask, min=epsilon)
+
+            pos_log_probs = pos_token_probs.log().sum(dim=-1)  # (batch_size,)
+            neg_log_probs = neg_token_probs.log().sum(dim=-1)  # (batch_size,)
+
+            score_diff = pos_log_probs - neg_log_probs
+            bpr_loss = -torch.log(torch.clamp(torch.sigmoid(score_diff), min=epsilon)).mean()
+
+            results['bpr_loss'] = bpr_loss
+
         return results
 
     @torch.no_grad()
@@ -473,6 +603,7 @@ class T5SequentialRecommender(T5PreTrainedModel):
         whole_item_ids = batch["whole_item_ids"].to(device)
         lm_labels = batch["target_ids"].to(device)
         attention_mask = input_ids.ne(0).to(dtype=torch.float32, device=device)
+
         output = self(
             input_ids=input_ids,
             whole_item_ids=whole_item_ids,
@@ -487,11 +618,13 @@ class T5SequentialRecommender(T5PreTrainedModel):
         loss = loss_fct(output.logits.view(-1, output.logits.size(-1)), lm_labels.view(-1))
         loss = loss.view(B, L) * lm_mask
         loss = loss.sum(dim=1) / lm_mask.sum(dim=1).clamp(min=1)
+
         results = {}
         results['loss'] = loss.mean()
         results['logits'] = output.logits
         results['total_loss'] = loss.detach().sum()
         results['total_loss_count'] = len(loss)
+
         return results
 
     @torch.no_grad()
@@ -513,4 +646,3 @@ class T5SequentialRecommender(T5PreTrainedModel):
             output_scores=True,
             return_dict_in_generate=True)
         return beam_out
-

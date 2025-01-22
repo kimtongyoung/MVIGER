@@ -17,6 +17,7 @@ def activation(act):
 
 def exact_match(predictions, scores, targets, total_sequence_generated):
     batched_predictions = []
+    batched_scores = []
     corr_list = []
     batch_length = len(targets)
     for b in range(batch_length):
@@ -31,6 +32,7 @@ def exact_match(predictions, scores, targets, total_sequence_generated):
     ndcg_5 = 0
     ndcg_10 = 0
     for pred, target in zip(batched_predictions, targets):
+        # remove batch-padding
         pred_10 = [one_p for one_p in pred[:10]]
         # hit@k
         if target in pred_10[:1]:
@@ -42,8 +44,10 @@ def exact_match(predictions, scores, targets, total_sequence_generated):
             corr_list.append(1)
         else:
             corr_list.append(0)
+        # ncdg@k
         if target in pred_10[:5]:
             gold_position = pred_10[:5].index(target)
+            # gold_position = [one_p for one_p in p[:5]].index(t)
             true_scores = [0.0] * 5
             true_scores[gold_position] = 1.0
             ndcg_5 += sum([score / math.log2(1 + idx) for idx, score in enumerate(true_scores, start=1)]) / 1
@@ -51,6 +55,7 @@ def exact_match(predictions, scores, targets, total_sequence_generated):
             ndcg_5 += 0
         if target in pred_10:
             gold_position = pred_10.index(target)
+            # gold_position = [one_p for one_p in p[:10]].index(t)
             true_scores = [0.0] * 10
             true_scores[gold_position] = 1.0
             ndcg_10 += sum([score / math.log2(1 + idx) for idx, score in enumerate(true_scores, start=1)]) / 1
@@ -69,7 +74,7 @@ def prefix_allowed_tokens_fn(candidate_trie):
     return prefix_allowed_tokens
 
 
-def predict_outputs(batch, model, prefix_allowed_tokens=None, k=20, max_len=20, tokenizer=None):
+def predict_outputs(batch, model, prefix_allowed_tokens=None, k=20, max_len=100, tokenizer=None):
     device = next(model.parameters()).device
     lm_labels = batch["target_ids"].to(device)
     prediction = model.generate_step(batch, k=k, max_len=max_len, constraint=prefix_allowed_tokens)
@@ -80,11 +85,13 @@ def predict_outputs(batch, model, prefix_allowed_tokens=None, k=20, max_len=20, 
     return hit_1, hit_5, hit_10, ncdg_5, ncdg_10, corr_list
 
 
-def save_outputs(batch, model, prefix_allowed_tokens=None, k=20, max_len=20, tokenizer=None):
+def save_outputs(batch, model, prefix_allowed_tokens=None, k=20, max_len=100, tokenizer=None):
+    # [[gt], [pred], [score]]
     pred_outs = []
     device = next(model.parameters()).device
     lm_labels = batch["target_ids"].to(device)
     label_length = batch['target_length'].to(device)
+    import time
     prediction = model.generate_step(batch, k=k, max_len=max_len, constraint=prefix_allowed_tokens)
     lm_labels = torch.where(lm_labels == -100, 0, lm_labels)
     gold_sents = tokenizer.batch_decode(lm_labels, skip_special_tokens=True)

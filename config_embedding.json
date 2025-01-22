@@ -1,4 +1,4 @@
 {
-  "data_dir": "data/",
-  "domain": "Beauty"
+  "data_dir": "data/amazon/filtered/",
+  "domain": "Yelp"
 }

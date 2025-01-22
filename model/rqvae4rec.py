@@ -1,12 +1,9 @@
-from pickle5 import pickle
-import torch
-from torch.nn import functional as F
-from model.utils import *
-from transformers import AutoTokenizer
-from sentence_transformers import SentenceTransformer
-from torch.utils.data.dataset import Dataset
 import os
+from pickle5 import pickle
 from sklearn.cluster import KMeans
+from torch.nn import functional as F
+from torch.utils.data.dataset import Dataset
+from model.utils import *
 
 
 class SEIDEmbeddingLoader(Dataset):
@@ -16,7 +13,7 @@ class SEIDEmbeddingLoader(Dataset):
         self.dim = self.data[0].shape[0]
 
     def load_embedding(self, root_path, domain, name):
-        with open(os.path.join(root_path, domain, f'{name}.pkl'), 'rb') as fIn:
+        with open(os.path.join(root_path, domain, f'{name}'), 'rb') as fIn:
             data = pickle.load(fIn)
         return data
 
@@ -45,18 +42,14 @@ class SEIDEmbeddingLoader(Dataset):
 
 
 class CEIDEmbeddingLoader(Dataset):
-    def __init__(self, config, user=False):
+    def __init__(self, config):
         super().__init__()
-        self.user = user
         self.data = self.load_embedding(config['data_dir'], config['domain'], config['embedding_name'])
-        try:
-            self.data_emb = self.data['item']
-        except:
-            self.data_emb = self.data['item_final_embed']
+        self.data_emb = self.data['item']
         self.dim = self.data_emb[0].shape[0]
 
     def load_embedding(self, root_path, domain, name):
-        with open(os.path.join(root_path, domain, f'{name}.pkl'), 'rb') as fIn:
+        with open(os.path.join(root_path, domain, f'{name}'), 'rb') as fIn:
             data = pickle.load(fIn)
         return data
 
@@ -83,9 +76,7 @@ class CEIDEmbeddingLoader(Dataset):
 class Encoder(nn.Module):
     def __init__(self, config):
         super().__init__()
-        layers = [nn.Sequential(nn.Linear(config['dims'][i], config['dims'][i + 1]),
-                                activation(config['act']),
-                                nn.Dropout(config['drop'])) for i in range(config['n_layers'])]
+        layers = [nn.Sequential(nn.Linear(config['dims'][i], config['dims'][i + 1]), nn.ReLU(True)) for i in range(config['n_layers'])]
         self.encoder = nn.Sequential(*layers)
         self.mapping = nn.Linear(config['dims'][-2], config['dims'][-1])
         self.apply(self.init_weights)
@@ -103,9 +94,7 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     def __init__(self, config):
         super().__init__()
-        layers = [nn.Sequential(nn.Linear(config['dims'][-i - 1], config['dims'][-i - 2]),
-                                nn.ReLU(),
-                                nn.Dropout(config['drop'])) for i in range(config['n_layers'])]
+        layers = [nn.Sequential(nn.Linear(config['dims'][-i - 1], config['dims'][-i - 2]), nn.ReLU(True)) for i in range(config['n_layers'])]
         self.decoder = nn.Sequential(*layers)
         self.mapping = nn.Linear(config['dims'][1], config['dims'][0])
         self.apply(self.init_weights)
@@ -120,7 +109,7 @@ class Decoder(nn.Module):
         return self.mapping(self.decoder(z))
 
 
-def kmeans(samples, num_clusters, num_iters=10):
+def kmeans(samples, num_clusters, num_iters=100):
     B, dim, dtype, device = samples.shape[0], samples.shape[-1], samples.dtype, samples.device
     x = samples.cpu().detach().numpy()
     cluster = KMeans(n_clusters=num_clusters, max_iter=num_iters).fit(x)
@@ -185,7 +174,7 @@ class VectorQuantizer(nn.Module):
 
 
 class ResidualQuantizer(nn.Module):
-    def __init__(self, code_len, n_embed, embed_dim, beta, kmeans_iter=10):
+    def __init__(self, code_len, n_embed, embed_dim, beta, kmeans_iter=100):
         super().__init__()
         self.code_len = code_len
         self.n_embed = n_embed
@@ -221,8 +210,7 @@ class RQVAE(nn.Module):
         super().__init__()
         self.encoder = Encoder(config)
         self.decoder = Decoder(config)
-        self.quantizer = ResidualQuantizer(config['code_len'], config['n_embed'], config['embed_dim'], config['beta'],
-                                           kmeans_iter=config['k_iter'])
+        self.quantizer = ResidualQuantizer(config['code_len'], config['n_embed'], config['embed_dim'], config['beta'], kmeans_iter=config['k_iter'])
 
     def forward(self, x):
         z_e = self.encode(x)
@@ -255,5 +243,3 @@ class RQVAE(nn.Module):
             'loss_latent': loss_latent,
             'codes': [code]
         }
-
-

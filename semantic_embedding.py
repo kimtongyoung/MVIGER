@@ -8,24 +8,22 @@ import json
 import re
 from collections import defaultdict
 import tqdm
-try:
-    from pickle5 import pickle
-except:
-    from pickle import pickle
+from pickle5 import pickle
+# import pickle
 
 
 class SentenceEmbeddingDataset(Dataset):
     def __init__(self, config):
         super().__init__()
-        self.datamap = self.load_json(os.path.join('data', config['domain'], 'datamaps.json'))[
-            'id2item']
-        self.meta_dict = self.load_json(os.path.join('data', config['domain'], 'meta_data.json'))
+        self.datamap = self.load_json(os.path.join(config['data_dir'], config['domain'], 'datamaps.json'))['id2item']
+        self.meta_dict = self.load_json(os.path.join(config['data_dir'], config['domain'], 'meta_data.json'))
         self.item_keys = list(self.datamap.keys())
-        self.model = SentenceTransformer('t5-base').cpu()
-        if config['domain'] == 'yelp':
+        self.model = SentenceTransformer('sentence-transformers/sentence-t5-base')
+        if config['domain'] == 'Yelp':
             self.is_yelp = True
         else:
             self.is_yelp = False
+
     def __len__(self):
         return len(self.datamap)
 
@@ -33,10 +31,9 @@ class SentenceEmbeddingDataset(Dataset):
         with open(file_path, "r") as f:
             return json.load(f)
 
-    # remove html tags and escape sid
     def text_cleaning(self, text):
-        text = re.sub(r'</?\w+[^>]*>', '', text)
-        text = re.sub(r'["\n\r]*', '', text)
+        text = re.sub(r'<.*?>', '', text)
+        # text = re.sub(r'[^\w\s]', '', text)
         return text
 
     def __getitem__(self, idx):
@@ -45,11 +42,13 @@ class SentenceEmbeddingDataset(Dataset):
         text = ''
         if self.is_yelp:
             if 'name' in meta.keys():
-                text += f'{meta["name"]}, '
+                text += f'Name: {meta["name"]}, '
             if 'city' in meta.keys():
-                text += f'{meta["city"]}, '
+                text += f'City: {meta["city"]}, '
             if 'state' in meta.keys():
-                text += f'{meta["state"]}, '
+                text += f'State: {meta["state"]}, '
+            if 'categories' in meta.keys():
+                text += f'Categories: {meta["categories"]}, '
             if 'attributes' in meta.keys():
                 if meta['attributes'] is not None:
                     for att, value in meta['attributes'].items():
@@ -65,16 +64,19 @@ class SentenceEmbeddingDataset(Dataset):
                         else:
                             text += f'{att}: {value}, '
 
+
         else:
             if 'title' in meta.keys():
-                text += f'{meta["title"]} '
+                text += f'Title: {meta["title"]}, '
             if 'brand' in meta.keys():
-                text += f'{meta["brand"]} '
+                text += f'Brand: {meta["brand"]}, '
             if 'categories' in meta.keys():
-                text += f'{meta["categories"][0]} |'
+                text += f'Categories: {meta["categories"][0]}, '
             if 'description' in meta.keys():
-                text += f'{meta["description"]}'
+                if meta['description'] != '':
+                    text += f'Description: {meta["description"]}.'
         text = self.text_cleaning(text)
+
         out_dict = defaultdict()
         out_dict['text'] = text
         embedding = self.model.encode(text)
@@ -105,9 +107,8 @@ def load_embedding(root_path, domain, name):
 def create_embedding(config):
     dset = SentenceEmbeddingDataset(config)
     res = get_embedding(dset)
-    save_embedding('data', config['domain'], res, 't5-base')
-    print(f"Semantic Embedding is saved at : {os.path.join('data', config['domain'], 't5-base')}")
-
+    save_embedding(config['data_dir'], config['domain'], res, 'emb_seid')
+    print(f"Semantic Embedding is saved")
 
 
 ##########################################
@@ -121,7 +122,6 @@ if __name__ == '__main__':
     args.add_argument('-d', '--device', default=None, type=str,
                       help='indices of GPUs to enable (default: all)')
 
-    # custom cli options to modify configuration from default values given in json file.
     CustomArgs = collections.namedtuple('CustomArgs', 'flags type target')
     options = [
         CustomArgs(['--lr', '--learning_rate'], type=float, target='optimizer;args;lr'),
