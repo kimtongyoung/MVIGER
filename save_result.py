@@ -54,7 +54,7 @@ def load_checkpoint(model, ckpt_path):
     print('Model loaded from ', ckpt_path)
 
 
-from data_loader.amazon_loader import SCRecDset
+from data_loader.amazon_loader import PCRecDset
 from torch.utils.data import DataLoader
 from collections import defaultdict
 
@@ -193,9 +193,9 @@ def inference(config):
     prompt = p5_prompt
 
 
-    infer_set_c = SCRecDset(root_path, config['domain'], 'infer', tokenizer, templates=prompt, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
+    infer_set_c = PCRecDset(root_path, config['domain'], 'infer', tokenizer, templates=prompt, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
                             num_templates=config['num_templates'], test_instruction_type='ceid', is_p5id=config['is_p5id'])
-    infer_set_s = SCRecDset(root_path, config['domain'], 'infer', tokenizer, templates=prompt, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
+    infer_set_s = PCRecDset(root_path, config['domain'], 'infer', tokenizer, templates=prompt, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
                             num_templates=config['num_templates'], test_instruction_type='seid', is_p5id=config['is_p5id'])
     candidates_c = infer_set_c.c_items
     candidate_trie_c = Trie([[0] + tokenizer.encode(candidate) for candidate in candidates_c])
@@ -225,7 +225,7 @@ def inference(config):
     result_c = []
     result_s = []
     with torch.no_grad():
-        pbar = tqdm(zip(infer_loader_c, infer_loader_s), desc="SC-Rec inference: ")
+        pbar = tqdm(zip(infer_loader_c, infer_loader_s), desc="PC-Rec inference: ")
         total_hit5 = 0.
         total_hit10 = 0.
         total_ndcg5 = 0.

@@ -8,7 +8,7 @@ import random
 from data_loader.sampling_tree import *
 
 
-class SCRecDset(Dataset):
+class PCRecDset(Dataset):
     def __init__(self, data_path, data_name, train_mode='train', tokenizer=None, templates=None, ceid_dict='', seid_dict='', num_templates=10, test_instruction_type='ceid', seed=2025, is_p5id=False):
         super().__init__()
         random.seed(seed)

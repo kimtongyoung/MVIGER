@@ -10,7 +10,7 @@ import random
 import wandb
 from model.utils import *
 from transformers import AutoTokenizer
-from data_loader.amazon_loader import SCRecDset
+from data_loader.amazon_loader import PCRecDset
 from prompt_p5 import task_subgroup_1 as p5_prompt
 from prompt_ours import task_subgroup_1 as our_prompt
 import os
@@ -137,11 +137,11 @@ def p5_runner(config):
         prompt = our_prompt
 
     # data_loader
-    train_set = SCRecDset(root_path, config['domain'], 'train', tokenizer, templates=prompt, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
+    train_set = PCRecDset(root_path, config['domain'], 'train', tokenizer, templates=prompt, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
                           seed=config['seed'], is_p5id=config['is_p5id'])
-    val_set0 = SCRecDset(root_path, config['domain'], 'val', tokenizer, templates=prompt, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
+    val_set0 = PCRecDset(root_path, config['domain'], 'val', tokenizer, templates=prompt, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
                          test_instruction_type='ceid', is_p5id=config['is_p5id'])
-    val_set1 = SCRecDset(root_path, config['domain'], 'val', tokenizer, templates=prompt, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
+    val_set1 = PCRecDset(root_path, config['domain'], 'val', tokenizer, templates=prompt, ceid_dict=config['idx_name1'], seid_dict=config['idx_name2'],
                          test_instruction_type='seid', is_p5id=config['is_p5id'])
 
     train_loader = DataLoader(train_set, shuffle=True, batch_size=config['batch_size'], collate_fn=train_set.collate_fn, num_workers=config['num_workers'])

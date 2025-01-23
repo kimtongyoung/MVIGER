@@ -71,10 +71,10 @@ def independent_indexing(user_items):
     item_id = 0
     final_data = {}
     user_list = list(user_items.keys())
-    # random_user_list = list(user_items.keys())
-    # random.shuffle(random_user_list)
+    random_user_list = list(user_items.keys())
+    random.shuffle(random_user_list)
 
-    for user in user_list:
+    for user in random_user_list:
         items = user_items[user]
         if user not in user2id:
             user2id[user] = str(user_id)

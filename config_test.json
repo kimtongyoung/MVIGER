@@ -1,13 +1,13 @@
 {
   "data_dir": "data/amazon/filtered/",
   "domain": "Yelp",
-  "ckpt": "saved/models/Recommender/0120-SCRec-p5id-Yelp-s2025/model_best_9ep.pth",
+  "ckpt": "saved_model_ path",
   "code_length": 3,
   "beam": 20,
   "codebook_size": 256,
   "idx_name1": "sequential-data-p5cid.json",
   "idx_name2": "sequential-data-p5semid.json",
   "num_templates": 10,
-  "is_p5id": true,
+  "is_p5id": false,
   "prompt": "p5"
 }

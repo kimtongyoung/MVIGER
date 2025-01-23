@@ -8,7 +8,7 @@ from parse_config import ConfigParser
 def trainer(config):
     if config['model_type'] == 'rq-vae':
         rqvae_runner(config)
-    elif config['model_type'] == 'sc_rec':
+    elif config['model_type'] == 'pc_rec':
         p5_runner(config)
 
 ##########################################
