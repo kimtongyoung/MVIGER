@@ -92,13 +92,10 @@ def mviger_scoring_agg(ceid_results, seid_results, temp=1):
             s_log_prob = s_log_probs[temp_idx][:b_size]
             # pdb.set_trace()
             
-            if opt:
-                norm_c_prob = norm_score(c_log_prob, tau, scaled) *  c_ll_prob
-                norm_s_prob = norm_score(s_log_prob, tau, scaled) *  s_ll_prob
-            else:
-                norm_c_prob = norm_score(c_log_prob, tau, scaled) * c_prior_prob
-                norm_s_prob = norm_score(s_log_prob, tau, scaled) * s_prior_prob
-            # pdb.set_trace()
+           
+            norm_c_prob = norm_score(c_log_prob, tau, scaled) * c_prior_prob
+            norm_s_prob = norm_score(s_log_prob, tau, scaled) * s_prior_prob
+           
             
             
             # for beam_idx in range(len(c_pred)):
