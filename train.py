@@ -1,4 +1,4 @@
-from trainer import p5_runner
+from trainer import mviger_runner
 from trainer_rqvae import rqvae_runner
 import argparse
 import collections
@@ -9,7 +9,7 @@ def trainer(config):
     if config['model_type'] == 'rq-vae':
         rqvae_runner(config)
     elif config['model_type'] == 'pc_rec':
-        p5_runner(config)
+        mviger_runner(config)
 
 ##########################################
 

@@ -1,4 +1,4 @@
-from save_result import inference
+from prediction import inference
 import argparse
 import collections
 from parse_config import ConfigParser

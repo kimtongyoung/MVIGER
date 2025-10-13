@@ -1,13 +1,22 @@
 {
-  "data_dir": "data/amazon/filtered/",
-  "domain": "Yelp",
-  "ckpt": "saved_model_ path",
-  "code_length": 3,
-  "beam": 20,
-  "codebook_size": 256,
-  "idx_name1": "sequential-data-p5cid.json",
-  "idx_name2": "sequential-data-p5semid.json",
-  "num_templates": 10,
-  "is_p5id": false,
-  "prompt": "p5"
-}
+    "data_dir": "data/",
+    "domain": "Sports_and_Outdoors",
+    "seed": 2025,
+    "ckpt": "saved_path",
+    "code_length": 3,
+    "codebook_size": 256,
+    "num_items": 18357,
+    "idx_name1": "sequential-data-Sports-ceid_333_.json",
+    "idx_name2": "sequential-data-Sports-seid_1488_.json",
+    "num_templates": 10,
+    "num_indexes": 2,
+    "test_batch_size": 4,
+    "num_workers": 4,
+    "shared_enc": false,
+    "index_list": [0,1],
+    "test_template_num":10,
+    "beam_size":20,
+    "use_inst":false,
+    "pooling_type": "sos"
+  }
+  
