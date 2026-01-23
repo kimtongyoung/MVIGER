@@ -132,11 +132,16 @@ def mviger_runner(config):
 
     model = T5SequentialRecommender.from_pretrained('t5-small', config=t5_config, ignore_mismatched_sizes=True)
 
-        model.resize_token_embeddings(t5_config.vocab_size)
+    model.resize_token_embeddings(t5_config.vocab_size)
     print(f'trainable params:{sum(p.numel() for p in model.parameters() if p.requires_grad)}')
+
+    if config['stage'] == 0:
+        model.encoder_prior = copy.deepcopy(model.encoder)
+        model.encoder_prior.set_input_embeddings(model.h_embed)
 
     if config['pretrained_path'] != "":
         state_dict = torch.load(config['pretrained_path'], 'cpu').state_dict()
+        #"shared.weight", "lm_head.weight", "decoder.embed_tokens.weight", "encoder.embed_tokens.weight", "h_embed.weight", "encoder_prior.embed_tokens.weight"
         if config['stage'] == 1:
             for k in ["h_embed.weight", "encoder_prior.embed_tokens.weight"]:
                 if k in state_dict:
@@ -146,6 +151,7 @@ def mviger_runner(config):
                 if k in state_dict:
                     del state_dict[k]
         model.load_state_dict(state_dict, strict=False)
+    
 
     prompt = task_subgroup_1
 
