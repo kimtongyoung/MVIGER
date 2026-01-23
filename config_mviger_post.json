@@ -1,8 +1,8 @@
 {
   "use_wandb": true,
   "project_name": "Recommender",
-  "model_type": "viger",
-  "config_name": "config_viger_beauty.json",
+  "model_type": "mviger",
+  "config_name": "config_mviger_post.json",
   "data_dir": "data/",
   "domain": "Beauty",
   "seed": 2025,
@@ -17,9 +17,9 @@
   "num_indexes": 2,
   "train_templates": 1,
   "batch_size": 4,
-  "beam_size": 2,
+  "beam_size": 10,
   "test_batch_size": 4,
-  "lr": 1e-5,
+  "lr": 1e-4,
   "num_workers": 4,
   "dropout": 0.1,
   "epoch": 20,
@@ -29,9 +29,9 @@
   "use_ll_norm": false,
   "use_inst":false,
   "pooling_type": "sos",
-  "alpha": 0.1,
+  "alpha": 0,
   "beta": 0,
   "tau": 1,
-  "val_start": 15,
-  "val_interval": 1
+  "val_start": 0,
+  "val_interval": 2
 }
