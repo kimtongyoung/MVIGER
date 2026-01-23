@@ -265,12 +265,12 @@ class T5SequentialRecommender(T5PreTrainedModel):
 
         self.encoder_prior = T5CustomEncoder(encoder_config, self.h_embed)
         self.prior = nn.Linear(config.d_model, self.num_indexes * self.num_templates)
-        self.prior_I = nn.Linear(config.d_model, self.num_indexes)
-        self.prior_T = nn.Linear(config.d_model, self.num_templates)
+        # self.prior_I = nn.Linear(config.d_model, self.num_indexes)
+        # self.prior_T = nn.Linear(config.d_model, self.num_templates)
         
-        self.prior_gain_I = nn.Parameter(torch.tensor(1.0))
-        self.prior_gain_T = nn.Parameter(torch.tensor(1.0))
-        self.prior_gain_IT = nn.Parameter(torch.tensor(1.0))
+        # self.prior_gain_I = nn.Parameter(torch.tensor(1.0))
+        # self.prior_gain_T = nn.Parameter(torch.tensor(1.0))
+        # self.prior_gain_IT = nn.Parameter(torch.tensor(1.0))
       
         
         self.model_parallel = False
@@ -543,18 +543,26 @@ class T5SequentialRecommender(T5PreTrainedModel):
                 raise NotImplementedError(f"Pooling type {pooling_type} not implemented")
                 
             
-            aaa = self.prior_I(h_hidden_state).unsqueeze(2) * self.prior_gain_I           # (B, I, 1)
-            bbb = self.prior_T(h_hidden_state).unsqueeze(1) * self.prior_gain_T         # (B, 1, T)
-            base = (aaa + bbb).reshape(B, I*T)   # (B, I*T)
-            cross = self.prior(h_hidden_state) * self.prior_gain_IT            # (B, I*T)
-            prior_logit = (base + cross) 
+            # aaa = self.prior_I(h_hidden_state).unsqueeze(2) * self.prior_gain_I           # (B, I, 1)
+            # bbb = self.prior_T(h_hidden_state).unsqueeze(1) * self.prior_gain_T         # (B, 1, T)
+            # base = (aaa + bbb).reshape(B, I*T)   # (B, I*T)
+            # cross = self.prior(h_hidden_state) * self.prior_gain_IT            # (B, I*T)
+            # prior_logit = (base + cross) 
+            # log_prior = F.log_softmax(prior_logit, dim=1)
+
+            prior_logit = self.prior(h_hidden_state)
             log_prior = F.log_softmax(prior_logit, dim=1)
+            log_p = log_prior.view(B, I, T)
+            log_pdet = log_p.detach()
 
             log_py = log_p_y_given_z.detach()
-            log_pdet = log_prior.view(B, I, T).detach()
+            
             logw = log_py/tau + alpha * log_pdet
+            
+            # logw = log_py/tau + alpha * log_pdet
 
             log_q = F.log_softmax(logw.view(B, -1), dim=1).view(B, I * T)
+            # log_q = log_py.view(B,-1)
             q_prob = log_q.exp()
             h_q = - q_prob * log_q
             h_q = h_q.sum(1).mean()
@@ -565,6 +573,9 @@ class T5SequentialRecommender(T5PreTrainedModel):
 
             h_prior = - log_prior * log_prior.exp()
             h_prior = h_prior.sum((1)).mean()
+
+            # h_ll = -log_py * log_py.exp()
+            # h_ll = h_ll.sum((1)).mean()
 
             elbo = exp_ll - kl
             
@@ -610,11 +621,12 @@ class T5SequentialRecommender(T5PreTrainedModel):
         else:
             raise NotImplementedError(f"Pooling type {pooling_type} not implemented")
         
-        aaa = self.prior_I(h_hidden_state).unsqueeze(2) * self.prior_gain_I           # (B, I, 1)
-        bbb = self.prior_T(h_hidden_state).unsqueeze(1) * self.prior_gain_T         # (B, 1, T)
-        base = (aaa + bbb).reshape(B, I*T)   # (B, I*T)
-        cross = self.prior(h_hidden_state) * self.prior_gain_IT            # (B, I*T)
-        prior_logit = (base + cross) 
+        # aaa = self.prior_I(h_hidden_state).unsqueeze(2) * self.prior_gain_I           # (B, I, 1)
+        # bbb = self.prior_T(h_hidden_state).unsqueeze(1) * self.prior_gain_T         # (B, 1, T)
+        # base = (aaa + bbb).reshape(B, I*T)   # (B, I*T)
+        # cross = self.prior(h_hidden_state) * self.prior_gain_IT            # (B, I*T)
+        # prior_logit = (base + cross) 
+        prior_logit = self.prior(h_hidden_state)
         log_prior = F.log_softmax(prior_logit, dim=1)
         prior_prob = log_prior.exp()
         # log_prior = F.log_softmax(prior/tau, dim=1).view(B, I, T)
