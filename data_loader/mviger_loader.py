@@ -98,8 +98,8 @@ class MVIGERDset(Dataset):
 
     def __len__(self):
         if self.train_mode == 'train':
-            # return self.total_num
-            return len(self.whole_seq)
+            return self.total_num
+            # return len(self.whole_seq)
         elif self.train_mode == 'val':
             return len(self.whole_seq)
         elif self.train_mode == 'test':
@@ -178,10 +178,17 @@ class MVIGERDset(Dataset):
 
         else:
             if self.train_mode == "train":
-                sequence = self.whole_seq[idx]
-                user_idx = self.user_list[idx]
-                purchase_history = sequence[:-3]
-                target_item = sequence[-3]
+                position_index = idx % self.total_num
+                user_idx = self.user_code[position_index]
+                seq_idx = self.user_list.index(user_idx)
+                target_idx = self.target_idx[position_index]
+                whole_sequence = self.train_seq[seq_idx]
+                target_item = whole_sequence[target_idx]
+                purchase_history = whole_sequence[:target_idx]
+                # sequence = self.whole_seq[idx]
+                # user_idx = self.user_list[idx]
+                # purchase_history = sequence[:-3]
+                # target_item = sequence[-3]
             elif self.train_mode == 'val':
                 sequence = self.whole_seq[idx]
                 user_idx = self.user_list[idx]
