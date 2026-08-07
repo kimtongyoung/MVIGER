@@ -14,9 +14,7 @@ Our framework consists of three main components:
 2. **Multi-Index Recommender Training:** Train the generative recommender with heterogeneous item indices and diverse prompt templates.
 3. **Prompt-consistent Reranking:** Integrate predictions from different template-index combinations using prompt-consistency scores.
 
-<p align="center">
-  <img src="./Figure_overall.png" width="100%" alt="Overview of MVIGER">
-</p>
+![Overview of MVIGER](Figure_overall.png)
 
 ## Requirements
 
