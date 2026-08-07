@@ -6,16 +6,16 @@ Official PyTorch implementation of **MVIGER: Multi-View Variational Integration 
 
 ## Overview
 
-MVIGER addresses the inconsistency of generative recommenders across different prompt templates and item index types by integrating their complementary preference knowledge.
+MVIGER leverages multiple views constructed from heterogeneous item indices and diverse prompt templates to capture complementary knowledge for generative recommendation.
 
 Our framework consists of three main components:
 
-1. **Item Multi-Index Generation:** Generate collaborative and semantic item indices from user-item interactions and item information.
-2. **Multi-Index Recommender Training:** Train the generative recommender with heterogeneous item indices and diverse prompt templates.
-3. **Prompt-consistent Reranking:** Integrate predictions from different template-index combinations using prompt-consistency scores.
+1. **Multi-view Item Index Generation:** Generate collaborative and semantic item indices (CEIDs and SEIDs) from user-item interactions and item information.
+2. **Multi-view Training:** Construct multiple views by combining heterogeneous item indices with diverse prompt templates, and jointly train the generative recommender and a prior network that models user-specific preferences over views.
+3. **Multi-view Inference:** Generate view-specific ranked lists and use the learned prior distribution to perform either single-view inference by selecting the most preferred view or multi-view inference by integrating predictions from multiple views.
 
 <p align="center">
-  <img src="Figure_overall.png" width="100%">
+  <img src="figure_overall.png" width="100%" alt="Overview of MVIGER">
 </p>
 
 ## Requirements
