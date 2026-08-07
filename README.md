@@ -11,7 +11,7 @@ MVIGER leverages multiple views constructed from heterogeneous item indices and 
 Our framework consists of three main components:
 
 1. **Multi-view Item Index Generation:** Generate collaborative and semantic item indices (CEIDs and SEIDs) from user-item interactions and item information.
-2. **Multi-view Training:** Construct multiple views by combining heterogeneous item indices with diverse prompt templates, and jointly train the generative recommender and a prior network that models user-specific preferences over views.
+2. **Multi-view Training:** Construct multiple views by combining heterogeneous item indices with diverse prompt templates, and  train the generative recommender and a prior network that models user-specific preferences over views.
 3. **Multi-view Inference:** Generate view-specific ranked lists and use the learned prior distribution to perform either single-view inference by selecting the most preferred view or multi-view inference by integrating predictions from multiple views.
 
 <p align="center">
