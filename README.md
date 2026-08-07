@@ -15,7 +15,7 @@ Our framework consists of three main components:
 3. **Prompt-consistent Reranking:** Integrate predictions from different template-index combinations using prompt-consistency scores.
 
 <p align="center">
-  <img src="Figure_overall.png" width="100%">
+  <img src="Figure_overall.pdf" width="100%">
 </p>
 ## Requirements
 
